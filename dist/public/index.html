@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WA Gateway Pro - WhatsApp Multi-Device SaaS Platform</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Socket.IO Client -->
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="h-full flex flex-col font-sans antialiased selection:bg-emerald-500 selection:text-white">
+
+  <!-- ================= AUTH CONTAINER (Login / Register) ================= -->
+  <div id="authScreen" class="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
+      <div class="p-8 text-center border-b border-slate-800 bg-slate-900/50">
+        <div class="inline-flex p-3 bg-emerald-500/10 text-emerald-400 rounded-2xl mb-4 border border-emerald-500/20">
+          <i data-lucide="message-square" class="w-8 h-8"></i>
+        </div>
+        <h1 class="text-2xl font-bold tracking-tight text-white">WA Gateway Pro</h1>
+        <p class="text-xs text-slate-400 mt-1">Enterprise Multi-Device WhatsApp SaaS Platform</p>
+      </div>
+
+      <div class="p-8">
+        <!-- Auth Tabs -->
+        <div class="flex border-b border-slate-800 mb-6">
+          <button id="tabLogin" onclick="switchAuthTab('login')" class="flex-1 pb-3 text-sm font-semibold text-emerald-400 border-b-2 border-emerald-400">Sign In</button>
+          <button id="tabRegister" onclick="switchAuthTab('register')" class="flex-1 pb-3 text-sm font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-200">Create Account</button>
+        </div>
+
+        <!-- Login Form -->
+        <form id="loginForm" onsubmit="handleLogin(event)" class="space-y-4">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Email Address</label>
+            <input type="email" id="loginEmail" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 transition" placeholder="admin@example.com">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Password</label>
+            <input type="password" id="loginPassword" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 transition" placeholder="••••••••">
+          </div>
+          <button type="submit" class="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold py-2.5 rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20">
+            <span>Sign In to Dashboard</span>
+            <i data-lucide="arrow-right" class="w-4 h-4"></i>
+          </button>
+        </form>
+
+        <!-- Register Form -->
+        <form id="registerForm" onsubmit="handleRegister(event)" class="space-y-4 hidden">
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Full Name</label>
+            <input type="text" id="regName" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 transition" placeholder="Alex Morgan">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Email Address</label>
+            <input type="email" id="regEmail" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 transition" placeholder="alex@company.com">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Password</label>
+            <input type="password" id="regPassword" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 transition" placeholder="••••••••">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-300 mb-1">Choose Subscription Tier</label>
+            <select id="regPlan" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500 transition">
+              <option value="starter">Starter (3 Sessions - 1k msgs/day)</option>
+              <option value="pro">Pro (10 Sessions - 10k msgs/day)</option>
+              <option value="enterprise">Enterprise (50 Sessions - Unlimited)</option>
+            </select>
+          </div>
+          <button type="submit" class="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold py-2.5 rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20">
+            <span>Create Account & Get API Key</span>
+            <i data-lucide="sparkles" class="w-4 h-4"></i>
+          </button>
+        </form>
+
+        <div id="authError" class="mt-4 p-3 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-xl hidden"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MAIN APP LAYOUT ================= -->
+  <div id="appScreen" class="h-full flex flex-col hidden">
+    <!-- Top Header -->
+    <header class="h-16 border-b border-slate-800 bg-slate-900/80 backdrop-blur px-6 flex items-center justify-between shrink-0">
+      <div class="flex items-center gap-3">
+        <div class="p-2 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20">
+          <i data-lucide="message-square" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <span class="font-bold text-white text-base">WA Gateway Pro</span>
+          <span class="text-[10px] px-2 py-0.5 ml-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full font-mono uppercase tracking-wider" id="userPlanBadge">STARTER</span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2 px-3 py-1 bg-slate-950 border border-slate-800 rounded-full text-xs text-slate-300">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="socketStatusText">Gateway Live</span>
+        </div>
+
+        <div class="flex items-center gap-3 pl-3 border-l border-slate-800">
+          <div class="text-right">
+            <div class="text-xs font-medium text-white" id="userNameHeader">User</div>
+            <div class="text-[10px] text-slate-400" id="userEmailHeader">email@domain.com</div>
+          </div>
+          <button onclick="handleLogout()" class="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition" title="Logout">
+            <i data-lucide="log-out" class="w-4 h-4"></i>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden">
+      <!-- Sidebar Navigation -->
+      <aside class="w-64 border-r border-slate-800 bg-slate-900/40 p-4 flex flex-col justify-between shrink-0">
+        <nav class="space-y-1">
+          <button onclick="switchView('overview')" id="nav-overview" class="nav-item w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-slate-800/60 hover:text-white transition active-nav">
+            <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+            <span>Overview</span>
+          </button>
+          <button onclick="switchView('sessions')" id="nav-sessions" class="nav-item w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-slate-800/60 hover:text-white transition">
+            <i data-lucide="smartphone" class="w-4 h-4"></i>
+            <span>WhatsApp Sessions</span>
+          </button>
+          <button onclick="switchView('chats')" id="nav-chats" class="nav-item w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-slate-800/60 hover:text-white transition">
+            <i data-lucide="messages-square" class="w-4 h-4"></i>
+            <span>Live Inbox</span>
+          </button>
+          <button onclick="switchView('broadcast')" id="nav-broadcast" class="nav-item w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-slate-800/60 hover:text-white transition">
+            <i data-lucide="send" class="w-4 h-4"></i>
+            <span>Bulk Broadcast</span>
+          </button>
+          <button onclick="switchView('apikeys')" id="nav-apikeys" class="nav-item w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-slate-800/60 hover:text-white transition">
+            <i data-lucide="key" class="w-4 h-4"></i>
+            <span>API Keys & Webhooks</span>
+          </button>
+          <button onclick="switchView('docs')" id="nav-docs" class="nav-item w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-300 hover:bg-slate-800/60 hover:text-white transition">
+            <i data-lucide="code-2" class="w-4 h-4"></i>
+            <span>API Docs & SDK</span>
+          </button>
+        </nav>
+
+        <!-- Subscription Card -->
+        <div class="p-4 rounded-2xl bg-gradient-to-br from-emerald-500/10 via-slate-900 to-slate-950 border border-emerald-500/20">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold text-emerald-400">Quota Usage</span>
+            <span class="text-[10px] text-slate-400" id="quotaSessionsText">0 / 3 Sessions</span>
+          </div>
+          <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden mb-3">
+            <div id="quotaProgressBar" class="bg-emerald-400 h-1.5 rounded-full" style="width: 0%"></div>
+          </div>
+          <p class="text-[11px] text-slate-400 leading-tight">Connect WhatsApp numbers and call the REST API from any server.</p>
+        </div>
+      </aside>
+
+      <!-- Main Content Area -->
+      <main class="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 bg-slate-950 flex flex-col min-h-0">
+
+        <!-- ================= SECTION 1: OVERVIEW ================= -->
+        <div id="view-overview" class="view-panel space-y-8">
+          <div>
+            <h2 class="text-xl font-bold text-white">SaaS Platform Overview</h2>
+            <p class="text-xs text-slate-400">Real-time gateway metrics and connection health</p>
+          </div>
+
+          <!-- Metric Cards Grid -->
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="p-5 bg-slate-900/60 border border-slate-800 rounded-2xl">
+              <div class="flex items-center justify-between text-slate-400 mb-3">
+                <span class="text-xs font-medium">Active Sessions</span>
+                <i data-lucide="smartphone" class="w-4 h-4 text-emerald-400"></i>
+              </div>
+              <div class="text-2xl font-bold text-white" id="metricActiveSessions">0</div>
+              <div class="text-[11px] text-slate-500 mt-1" id="metricTotalSessions">0 Total configured</div>
+            </div>
+
+            <div class="p-5 bg-slate-900/60 border border-slate-800 rounded-2xl">
+              <div class="flex items-center justify-between text-slate-400 mb-3">
+                <span class="text-xs font-medium">Messages Sent Today</span>
+                <i data-lucide="arrow-up-right" class="w-4 h-4 text-cyan-400"></i>
+              </div>
+              <div class="text-2xl font-bold text-white" id="metricSentToday">0</div>
+              <div class="text-[11px] text-slate-500 mt-1" id="metricSentTotal">0 Total all time</div>
+            </div>
+
+            <div class="p-5 bg-slate-900/60 border border-slate-800 rounded-2xl">
+              <div class="flex items-center justify-between text-slate-400 mb-3">
+                <span class="text-xs font-medium">Inbound Received</span>
+                <i data-lucide="arrow-down-left" class="w-4 h-4 text-indigo-400"></i>
+              </div>
+              <div class="text-2xl font-bold text-white" id="metricReceivedTotal">0</div>
+              <div class="text-[11px] text-slate-500 mt-1">Live webhook forwarded</div>
+            </div>
+
+            <div class="p-5 bg-slate-900/60 border border-slate-800 rounded-2xl">
+              <div class="flex items-center justify-between text-slate-400 mb-3">
+                <span class="text-xs font-medium">Webhook Delivery</span>
+                <i data-lucide="zap" class="w-4 h-4 text-amber-400"></i>
+              </div>
+              <div class="text-2xl font-bold text-white" id="metricWebhookRate">100%</div>
+              <div class="text-[11px] text-slate-500 mt-1" id="metricWebhookCount">0 Delivered</div>
+            </div>
+          </div>
+
+          <!-- Quick Connect Banner -->
+          <div class="p-6 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900/90 to-emerald-950/40 border border-slate-800 flex items-center justify-between">
+            <div>
+              <h3 class="text-base font-semibold text-white mb-1">Ready to connect a WhatsApp Number?</h3>
+              <p class="text-xs text-slate-400">Create a new session, scan the QR code with WhatsApp, and start sending messages programmatically.</p>
+            </div>
+            <button onclick="openNewSessionModal()" class="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-xl text-xs transition flex items-center gap-2 shadow-lg shadow-emerald-500/20 shrink-0">
+              <i data-lucide="plus" class="w-4 h-4"></i>
+              <span>Create Session</span>
+            </button>
+          </div>
+
+          <!-- Recent Messages Log -->
+          <div class="bg-slate-900/40 border border-slate-800 rounded-2xl p-6">
+            <h3 class="text-sm font-semibold text-white mb-4">Recent Activity</h3>
+            <div id="recentActivityList" class="space-y-3 text-xs text-slate-400">
+              <div class="text-center py-6 text-slate-500">No activity yet. Connect a session to start.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= SECTION 2: SESSIONS ================= -->
+        <div id="view-sessions" class="view-panel space-y-6 hidden">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-xl font-bold text-white">WhatsApp Sessions</h2>
+              <p class="text-xs text-slate-400">Multi-Device connection management and QR code pairing</p>
+            </div>
+            <button onclick="openNewSessionModal()" class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-xl text-xs transition flex items-center gap-2 shadow-lg shadow-emerald-500/20">
+              <i data-lucide="plus" class="w-4 h-4"></i>
+              <span>New Session</span>
+            </button>
+          </div>
+
+          <!-- Sessions Grid -->
+          <div id="sessionsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Dynamic session cards injected here -->
+          </div>
+        </div>
+
+        <!-- ================= SECTION 3: LIVE CHATS ================= -->
+        <div id="view-chats" class="view-panel flex-1 flex flex-col min-h-0 space-y-3 hidden">
+          <div class="flex items-center justify-between shrink-0">
+            <div>
+              <h2 class="text-xl font-bold text-white">Live Inbox & Chat</h2>
+              <p class="text-xs text-slate-400">Real-time incoming and outgoing WhatsApp messages with rich media & DP support</p>
+            </div>
+          </div>
+
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl flex-1 flex min-h-[520px] h-[calc(100vh-12rem)] overflow-hidden shadow-2xl">
+            <!-- Chats List (Left Sidebar) -->
+            <div class="w-80 md:w-[350px] border-r border-slate-800 flex flex-col bg-slate-900/40 shrink-0 min-h-0">
+              <!-- Session Selector -->
+              <div class="p-3 border-b border-slate-800/80 bg-slate-950/40 space-y-2 shrink-0">
+                <div class="flex items-center gap-2">
+                  <i data-lucide="smartphone" class="w-3.5 h-3.5 text-emerald-400"></i>
+                  <select id="chatSessionSelector" onchange="loadChats()" class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500">
+                    <option value="">Select Connected Session...</option>
+                  </select>
+                </div>
+                <!-- Contact Search Filter -->
+                <div class="relative">
+                  <i data-lucide="search" class="w-3.5 h-3.5 text-slate-500 absolute left-3 top-2.5"></i>
+                  <input type="text" id="contactSearchInput" oninput="filterChatContacts()" placeholder="Search name or phone..." class="w-full bg-slate-950/80 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500">
+                </div>
+              </div>
+
+              <!-- Contacts Scrollable List -->
+              <div id="chatContactsList" class="flex-1 overflow-y-auto divide-y divide-slate-800/40 custom-scroll min-h-0">
+                <div class="p-6 text-center text-xs text-slate-500">Select a session above to load conversations</div>
+              </div>
+            </div>
+
+            <!-- Chat Window (Right Panel) -->
+            <div class="flex-1 flex flex-col bg-slate-950/80 min-w-0 min-h-0">
+              <!-- Active Chat Header -->
+              <div class="h-16 border-b border-slate-800 px-6 flex items-center justify-between bg-slate-900/40 shrink-0">
+                <div class="flex items-center gap-3 min-w-0" id="activeChatHeader">
+                  <div class="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-500">
+                    <i data-lucide="user" class="w-5 h-5"></i>
+                  </div>
+                  <div>
+                    <div class="text-xs font-bold text-slate-400">No conversation selected</div>
+                    <div class="text-[10px] text-slate-500">Select a contact from the left to start messaging</div>
+                  </div>
+                </div>
+
+                <div id="activeChatActions" class="flex items-center gap-2 hidden">
+                  <button onclick="reloadActiveChat()" class="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition" title="Refresh Messages">
+                    <i data-lucide="rotate-cw" class="w-4 h-4"></i>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Chat Messages Container -->
+              <div id="chatMessagesContainer" class="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 custom-scroll min-h-0">
+                <div class="text-center text-xs text-slate-600 py-24 flex flex-col items-center gap-3">
+                  <div class="p-3 bg-slate-900/60 rounded-full border border-slate-800">
+                    <i data-lucide="message-square" class="w-6 h-6 text-slate-500"></i>
+                  </div>
+                  <p>Click on a conversation on the left to view message history</p>
+                </div>
+              </div>
+
+              <!-- File Attachment Preview Bar (shown when file is selected) -->
+              <div id="chatAttachmentPreview" class="px-4 py-2.5 bg-slate-900/95 border-t border-slate-800 flex items-center justify-between hidden shrink-0">
+                <div class="flex items-center gap-2 overflow-hidden">
+                  <span class="p-1.5 bg-emerald-500/10 text-emerald-400 rounded-lg shrink-0">
+                    <i data-lucide="file" class="w-4 h-4" id="attachmentIcon"></i>
+                  </span>
+                  <div class="truncate">
+                    <div class="text-xs text-white font-medium truncate" id="attachmentFileName">file.jpg</div>
+                    <div class="text-[10px] text-slate-400 font-mono" id="attachmentFileSize">0 KB</div>
+                  </div>
+                </div>
+                <button onclick="clearSelectedAttachment()" class="p-1.5 text-slate-400 hover:text-red-400 rounded-lg transition" title="Remove attachment">
+                  <i data-lucide="x" class="w-4 h-4"></i>
+                </button>
+              </div>
+
+              <!-- Message Input & Action Bar (Fixed, Modern, Clean) -->
+              <form id="chatSendForm" onsubmit="handleSendDirectMessage(event)" class="p-3 md:p-4 border-t border-slate-800 bg-slate-900/50 backdrop-blur shrink-0">
+                <!-- Hidden file input -->
+                <input type="file" id="chatFileInput" class="hidden" onchange="handleFileSelected(event)" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.zip,.txt">
+                
+                <div class="flex items-end gap-2 bg-slate-950/90 border border-slate-800 focus-within:border-emerald-500/70 focus-within:ring-2 focus-within:ring-emerald-500/20 rounded-2xl p-2 transition">
+                  <!-- Attachment Button -->
+                  <button type="button" onclick="document.getElementById('chatFileInput').click()" class="p-2 text-slate-400 hover:text-emerald-400 hover:bg-slate-800/80 rounded-xl transition shrink-0" title="Attach image, video, audio or document">
+                    <i data-lucide="paperclip" class="w-4 h-4"></i>
+                  </button>
+
+                  <!-- Text Input / Textarea -->
+                  <textarea id="chatInputText" rows="1" placeholder="Type a message (Press Enter to send, Shift+Enter for new line)..." 
+                    onkeydown="handleChatInputKeydown(event)"
+                    oninput="autoResizeTextarea(this)"
+                    class="flex-1 bg-transparent border-none focus:outline-none text-xs text-white placeholder-slate-500 resize-none max-h-32 py-1.5 leading-relaxed"></textarea>
+                  
+                  <!-- Send Button -->
+                  <button type="submit" id="chatSendBtn" class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:hover:bg-emerald-500 text-slate-950 font-semibold rounded-xl text-xs transition flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 shrink-0">
+                    <i data-lucide="send" class="w-3.5 h-3.5"></i>
+                    <span>Send</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= SECTION 4: BULK BROADCAST ================= -->
+        <div id="view-broadcast" class="view-panel space-y-6 hidden">
+          <div>
+            <h2 class="text-xl font-bold text-white">Bulk Message Broadcast</h2>
+            <p class="text-xs text-slate-400">Send marketing announcements and notifications to multiple numbers with anti-ban delay</p>
+          </div>
+
+          <div class="max-w-2xl bg-slate-900/60 border border-slate-800 rounded-2xl p-6">
+            <form id="broadcastForm" onsubmit="handleBroadcast(event)" class="space-y-4">
+              <div>
+                <label class="block text-xs font-medium text-slate-300 mb-1">Sender WhatsApp Session</label>
+                <select id="broadcastSessionId" required class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white">
+                  <!-- Injected dynamically -->
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-300 mb-1">Recipient Numbers (Comma or Newline separated)</label>
+                <textarea id="broadcastNumbers" rows="4" required class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white font-mono focus:outline-none focus:border-emerald-500" placeholder="1234567890&#10;9876543210&#10;+14155552671"></textarea>
+                <p class="text-[10px] text-slate-500 mt-1">Include country codes (e.g., 14155552671 or 919876543210)</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-300 mb-1">Message Content</label>
+                <textarea id="broadcastMessage" rows="4" required class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-emerald-500" placeholder="Hello! We are excited to announce..."></textarea>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-300 mb-1">Delay Between Messages (Seconds)</label>
+                <input type="number" id="broadcastDelay" value="3" min="2" max="30" class="w-32 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-xs text-white">
+                <span class="text-[10px] text-slate-500 ml-2">Recommended: 3-5 seconds to maintain high deliverability</span>
+              </div>
+              <button type="submit" class="w-full py-3 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20">
+                <i data-lucide="send" class="w-4 h-4"></i>
+                <span>Launch Broadcast Campaign</span>
+              </button>
+            </form>
+            <div id="broadcastStatus" class="mt-4 p-3 rounded-xl text-xs hidden"></div>
+          </div>
+        </div>
+
+        <!-- ================= SECTION 5: API KEYS & WEBHOOKS ================= -->
+        <div id="view-apikeys" class="view-panel space-y-8 hidden">
+          <div>
+            <h2 class="text-xl font-bold text-white">Developer Hub: API Keys & Webhooks</h2>
+            <p class="text-xs text-slate-400">Use your API Keys to integrate WhatsApp messaging into any server, CRM, or script</p>
+          </div>
+
+          <!-- API Keys Section -->
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-sm font-semibold text-white">Active API Keys</h3>
+                <p class="text-[11px] text-slate-400">Authenticate API calls with header: <code class="text-emerald-400">X-Api-Key: ak_live_...</code></p>
+              </div>
+              <button onclick="handleCreateApiKey()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-xl text-xs transition flex items-center gap-2">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+                <span>Generate Key</span>
+              </button>
+            </div>
+
+            <div id="apiKeysTable" class="divide-y divide-slate-800 border border-slate-800 rounded-xl overflow-hidden bg-slate-950">
+              <!-- Dynamic API Keys -->
+            </div>
+          </div>
+
+          <!-- Webhook Configuration -->
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-4">
+            <h3 class="text-sm font-semibold text-white">Global Webhook Endpoint</h3>
+            <p class="text-[11px] text-slate-400">Receive live HTTP POST payloads for every incoming message and connection status event.</p>
+            <form onsubmit="handleSaveWebhook(event)" class="flex gap-2">
+              <input type="url" id="globalWebhookUrl" placeholder="https://your-domain.com/api/webhook" class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500">
+              <button type="submit" class="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-xl text-xs transition">
+                Save Webhook
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <!-- ================= SECTION 6: API DOCS & SDK ================= -->
+        <div id="view-docs" class="view-panel space-y-8 hidden">
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                <i data-lucide="book-open" class="w-5 h-5 text-emerald-400"></i>
+                <span>REST API Reference & WhatsApp Chat SDK</span>
+              </h2>
+              <p class="text-xs text-slate-400">Complete guide & interactive code examples to build custom WhatsApp web apps, CRM bots, and messaging workflows</p>
+            </div>
+            <div class="flex items-center gap-2 text-xs">
+              <span class="px-3 py-1 bg-slate-900 border border-slate-800 rounded-xl text-slate-300 font-mono">Base URL: <strong class="text-emerald-400 font-bold">http://localhost:3000/api/v1</strong></span>
+            </div>
+          </div>
+
+          <!-- Quick Navigation Pills -->
+          <div class="flex flex-wrap gap-2 pb-2 border-b border-slate-800 text-xs">
+            <a href="#doc-send-text" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-emerald-400 transition">💬 Send Text</a>
+            <a href="#doc-send-media" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-emerald-400 transition">🖼️ Send Media (Images/Docs/Voice)</a>
+            <a href="#doc-get-chats" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-emerald-400 transition">📋 Get Contact Chats & DP</a>
+            <a href="#doc-get-messages" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-emerald-400 transition">📜 Get Conversation History</a>
+            <a href="#doc-edit-contact" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-emerald-400 transition">✏️ Edit Contact & Upload DP</a>
+            <a href="#doc-bulk-broadcast" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-emerald-400 transition">🚀 Bulk Broadcast</a>
+            <a href="#doc-sessions" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-emerald-400 transition">📱 Session Management</a>
+            <a href="#doc-webhooks-sockets" class="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-emerald-400 transition">⚡ Real-Time Webhooks & Sockets</a>
+          </div>
+
+          <!-- Documentation Sections -->
+          <div class="space-y-6">
+
+            <!-- 1. Send Text Message -->
+            <div id="doc-send-text" class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-md font-mono text-xs font-bold">POST</span>
+                  <span class="font-mono text-xs text-white font-bold">/api/v1/messages/send-text</span>
+                </div>
+                <span class="text-[11px] text-slate-500">Send WhatsApp Message</span>
+              </div>
+              <p class="text-xs text-slate-400">Send an instant direct text message to any phone number or WhatsApp JID with delivery acknowledgment.</p>
+
+              <!-- Request Body Table -->
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs border border-slate-800/80 rounded-xl overflow-hidden bg-slate-950/60">
+                  <thead class="bg-slate-900/80 text-slate-400 font-mono text-[11px]">
+                    <tr><th class="p-2.5">Field</th><th class="p-2.5">Type</th><th class="p-2.5">Required</th><th class="p-2.5">Description</th></tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800 text-slate-300">
+                    <tr><td class="p-2.5 font-mono text-emerald-400">sessionId</td><td class="p-2.5 text-slate-500">string</td><td class="p-2.5 text-amber-400 font-semibold">Yes</td><td class="p-2.5">Active session UUID</td></tr>
+                    <tr><td class="p-2.5 font-mono text-emerald-400">to</td><td class="p-2.5 text-slate-500">string</td><td class="p-2.5 text-amber-400 font-semibold">Yes</td><td class="p-2.5">Phone number with country code (e.g. <code>919999846226</code>) or JID</td></tr>
+                    <tr><td class="p-2.5 font-mono text-emerald-400">text</td><td class="p-2.5 text-slate-500">string</td><td class="p-2.5 text-amber-400 font-semibold">Yes</td><td class="p-2.5">Message text content (emojis, formatting supported)</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Code Box -->
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+<pre><code>curl -X POST http://localhost:3000/api/v1/messages/send-text \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -d '{
+    "sessionId": "YOUR_SESSION_ID",
+    "to": "919999846226",
+    "text": "Hello! Your booking has been confirmed. 🎉"
+  }'</code></pre>
+              </div>
+            </div>
+
+            <!-- 2. Send Media Message -->
+            <div id="doc-send-media" class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-md font-mono text-xs font-bold">POST</span>
+                  <span class="font-mono text-xs text-white font-bold">/api/v1/messages/send-media</span>
+                </div>
+                <span class="text-[11px] text-slate-500">Send Images, Videos, Audio & Docs</span>
+              </div>
+              <p class="text-xs text-slate-400">Send images, MP4 videos, voice notes (PTT), and documents (PDF, DOCX, ZIP). Supports both hosted URL (<code>mediaUrl</code>) and direct file upload (multipart <code>file</code> form data).</p>
+
+              <!-- Request Body Table -->
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs border border-slate-800/80 rounded-xl overflow-hidden bg-slate-950/60">
+                  <thead class="bg-slate-900/80 text-slate-400 font-mono text-[11px]">
+                    <tr><th class="p-2.5">Field</th><th class="p-2.5">Type</th><th class="p-2.5">Required</th><th class="p-2.5">Description</th></tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800 text-slate-300">
+                    <tr><td class="p-2.5 font-mono text-emerald-400">sessionId</td><td class="p-2.5 text-slate-500">string</td><td class="p-2.5 text-amber-400 font-semibold">Yes</td><td class="p-2.5">Active session UUID</td></tr>
+                    <tr><td class="p-2.5 font-mono text-emerald-400">to</td><td class="p-2.5 text-slate-500">string</td><td class="p-2.5 text-amber-400 font-semibold">Yes</td><td class="p-2.5">Recipient phone number or JID</td></tr>
+                    <tr><td class="p-2.5 font-mono text-emerald-400">mediaType</td><td class="p-2.5 text-slate-500">string</td><td class="p-2.5 text-amber-400 font-semibold">Yes</td><td class="p-2.5"><code>image</code> | <code>video</code> | <code>audio</code> | <code>document</code> | <code>sticker</code></td></tr>
+                    <tr><td class="p-2.5 font-mono text-emerald-400">mediaUrl</td><td class="p-2.5 text-slate-500">string</td><td class="p-2.5 text-slate-500">Optional</td><td class="p-2.5">Publicly accessible HTTP/HTTPS URL of the media file</td></tr>
+                    <tr><td class="p-2.5 font-mono text-emerald-400">file</td><td class="p-2.5 text-slate-500">binary</td><td class="p-2.5 text-slate-500">Optional</td><td class="p-2.5">Direct file buffer (when using multipart/form-data upload)</td></tr>
+                    <tr><td class="p-2.5 font-mono text-emerald-400">caption</td><td class="p-2.5 text-slate-500">string</td><td class="p-2.5 text-slate-500">Optional</td><td class="p-2.5">Text caption attached to the image, video, or document</td></tr>
+                    <tr><td class="p-2.5 font-mono text-emerald-400">fileName</td><td class="p-2.5 text-slate-500">string</td><td class="p-2.5 text-slate-500">Optional</td><td class="p-2.5">File display name for documents (e.g. <code>Invoice_102.pdf</code>)</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Code Box 1: JSON Media URL -->
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+                <div class="text-[10px] text-slate-500 mb-2 font-sans font-semibold">Example A: Send using Image / Document URL</div>
+<pre><code>curl -X POST http://localhost:3000/api/v1/messages/send-media \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -d '{
+    "sessionId": "YOUR_SESSION_ID",
+    "to": "919999846226",
+    "mediaType": "image",
+    "mediaUrl": "https://example.com/photo.jpg",
+    "caption": "Here is the product brochure!"
+  }'</code></pre>
+              </div>
+
+              <!-- Code Box 2: Multipart Form File Upload -->
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+                <div class="text-[10px] text-slate-500 mb-2 font-sans font-semibold">Example B: Send via Direct Local File Upload (Multipart)</div>
+<pre><code>curl -X POST http://localhost:3000/api/v1/messages/send-media \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -F "sessionId=YOUR_SESSION_ID" \
+  -F "to=919999846226" \
+  -F "mediaType=document" \
+  -F "file=@/path/to/Invoice.pdf" \
+  -F "caption=Attached is your invoice"</code></pre>
+              </div>
+            </div>
+
+            <!-- 3. Get Contact Chats (List with DP & Mobile Numbers) -->
+            <div id="doc-get-chats" class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="px-2.5 py-1 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-md font-mono text-xs font-bold">GET</span>
+                  <span class="font-mono text-xs text-white font-bold">/api/v1/chats?sessionId={sessionId}</span>
+                </div>
+                <span class="text-[11px] text-slate-500">Contact List & Profile Pictures</span>
+              </div>
+              <p class="text-xs text-slate-400">Retrieve all conversations with Contact Names, formatted Mobile Numbers, DP Profile Pictures, Last Message preview, unread status, and timestamp.</p>
+
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+<pre><code>curl -X GET "http://localhost:3000/api/v1/chats?sessionId=YOUR_SESSION_ID" \
+  -H "X-Api-Key: YOUR_API_KEY"</code></pre>
+              </div>
+
+              <!-- Response Preview -->
+              <div class="relative bg-slate-950/80 rounded-xl p-4 border border-slate-800/80 font-mono text-xs text-slate-300 overflow-x-auto">
+                <div class="text-[10px] text-emerald-400 mb-2 font-sans font-semibold">Response JSON Example:</div>
+<pre><code>{
+  "success": true,
+  "chats": [
+    {
+      "remote_jid": "919999846226@s.whatsapp.net",
+      "name": "Reema Verma",
+      "phone_number": "+919999846226",
+      "display_name": "Reema Verma",
+      "avatar_url": "https://pps.whatsapp.net/v/t61.24694-24/...",
+      "last_message": "Photo",
+      "media_type": "image",
+      "media_url": "/media/d93fa14...jpg",
+      "last_timestamp": 1773024888,
+      "from_me": 0
+    }
+  ]
+}</code></pre>
+              </div>
+            </div>
+
+            <!-- 4. Get Conversation History Messages -->
+            <div id="doc-get-messages" class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="px-2.5 py-1 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-md font-mono text-xs font-bold">GET</span>
+                  <span class="font-mono text-xs text-white font-bold">/api/v1/messages?sessionId={sessionId}&jid={jid}</span>
+                </div>
+                <span class="text-[11px] text-slate-500">Chat History & Media URLs</span>
+              </div>
+              <p class="text-xs text-slate-400">Fetch full conversation history with incoming/outgoing flags, message timestamps, media attachments, audio voice notes, and captions.</p>
+
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+<pre><code>curl -X GET "http://localhost:3000/api/v1/messages?sessionId=YOUR_SESSION_ID&jid=919999846226@s.whatsapp.net" \
+  -H "X-Api-Key: YOUR_API_KEY"</code></pre>
+              </div>
+            </div>
+
+            <!-- 5. Edit Contact Details & Upload Custom DP -->
+            <div id="doc-edit-contact" class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="px-2.5 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-md font-mono text-xs font-bold">POST</span>
+                  <span class="font-mono text-xs text-white font-bold">/api/v1/chats/contact</span>
+                </div>
+                <span class="text-[11px] text-slate-500">Edit Name, Number & Upload DP</span>
+              </div>
+              <p class="text-xs text-slate-400">Update a contact's display name, phone number, and optionally upload a custom profile picture (avatar photo).</p>
+
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+<pre><code>curl -X POST http://localhost:3000/api/v1/chats/contact \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -F "sessionId=YOUR_SESSION_ID" \
+  -F "jid=49783049875685@lid" \
+  -F "name=Rohit Sharma (VIP Client)" \
+  -F "phoneNumber=+919876543210" \
+  -F "avatarFile=@/path/to/profile_pic.jpg"</code></pre>
+              </div>
+            </div>
+
+            <!-- 6. Bulk Broadcaster API -->
+            <div id="doc-bulk-broadcast" class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="px-2.5 py-1 bg-purple-500/10 text-purple-400 border border-purple-500/20 rounded-md font-mono text-xs font-bold">POST</span>
+                  <span class="font-mono text-xs text-white font-bold">/api/v1/messages/send-bulk</span>
+                </div>
+                <span class="text-[11px] text-slate-500">Anti-Ban Campaign Engine</span>
+              </div>
+              <p class="text-xs text-slate-400">Broadcast marketing announcements, reminders, or notifications to a list of phone numbers with automatic rate limiting and delay.</p>
+
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+<pre><code>curl -X POST http://localhost:3000/api/v1/messages/send-bulk \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: YOUR_API_KEY" \
+  -d '{
+    "sessionId": "YOUR_SESSION_ID",
+    "numbers": ["919999846226", "919876543210", "14155552671"],
+    "message": "🔥 Flash Sale! Get 30% off today with code FLASH30",
+    "delaySeconds": 3
+  }'</code></pre>
+              </div>
+            </div>
+
+            <!-- 7. WhatsApp Session Management -->
+            <div id="doc-sessions" class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="px-2.5 py-1 bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-md font-mono text-xs font-bold">API</span>
+                  <span class="font-mono text-xs text-white font-bold">WhatsApp Session Lifecycle Endpoints</span>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                <div class="p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                  <div class="font-mono text-emerald-400 font-bold">POST /api/v1/sessions</div>
+                  <div class="text-slate-400 text-[11px] mt-1">Create new session: <code>{"sessionName": "Support_1"}</code></div>
+                </div>
+                <div class="p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                  <div class="font-mono text-blue-400 font-bold">GET /api/v1/sessions</div>
+                  <div class="text-slate-400 text-[11px] mt-1">List all connected sessions and phone numbers</div>
+                </div>
+                <div class="p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                  <div class="font-mono text-amber-400 font-bold">POST /api/v1/sessions/:id/pairing-code</div>
+                  <div class="text-slate-400 text-[11px] mt-1">Pair via 8-digit code: <code>{"phoneNumber": "91..."}</code></div>
+                </div>
+                <div class="p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                  <div class="font-mono text-red-400 font-bold">POST /api/v1/sessions/:id/stop</div>
+                  <div class="text-slate-400 text-[11px] mt-1">Disconnect / Logout session safely</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 8. Real-Time Webhooks & Socket.IO Events -->
+            <div id="doc-webhooks-sockets" class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="px-2.5 py-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-md font-mono text-xs font-bold">LIVE</span>
+                  <span class="font-mono text-xs text-white font-bold">Webhooks & Real-Time Socket.IO</span>
+                </div>
+                <span class="text-[11px] text-slate-500">Build Real-Time Chat Apps</span>
+              </div>
+              <p class="text-xs text-slate-400">Receive live events whenever a customer sends a message or when a session connection status changes.</p>
+
+              <!-- Webhook Payload Format -->
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+                <div class="text-[10px] text-amber-400 mb-2 font-sans font-semibold">Incoming Message Webhook Payload (HTTP POST to your webhook URL):</div>
+<pre><code>{
+  "event": "message.received",
+  "sessionId": "a98e72-...",
+  "data": {
+    "id": "msg_019283",
+    "remoteJid": "919999846226@s.whatsapp.net",
+    "pushName": "Reema Verma",
+    "fromMe": false,
+    "body": "Hello, I want to place an order",
+    "mediaType": "text",
+    "mediaUrl": null,
+    "timestamp": 1773024900
+  },
+  "timestamp": "2026-10-09T03:00:00.000Z"
+}</code></pre>
+              </div>
+
+              <!-- Socket.IO Code Sample -->
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+                <div class="text-[10px] text-cyan-400 mb-2 font-sans font-semibold">Frontend JavaScript / Node.js Socket.IO Connection:</div>
+<pre><code>// Connect to live Gateway Socket
+const socket = io('http://localhost:3000', {
+  auth: { token: 'YOUR_JWT_AUTH_TOKEN' }
+});
+
+// Listen for live inbound WhatsApp messages
+socket.on('new_message', (msg) => {
+  console.log(`New message from ${msg.pushName} (${msg.remoteJid}):`, msg.body);
+  if (msg.mediaUrl) {
+    console.log(`Media attachment URL: http://localhost:3000${msg.mediaUrl}`);
+  }
+});
+
+// Listen for session status updates
+socket.on('session_status', ({ sessionId, status, phone }) => {
+  console.log(`Session ${sessionId} is now ${status} (Number: +${phone})`);
+});</code></pre>
+              </div>
+            </div>
+
+            <!-- 9. Multi-Language SDK Snippets -->
+            <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 space-y-4">
+              <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+                <i data-lucide="code" class="w-4 h-4 text-emerald-400"></i>
+                <span>Integration in Python, Node.js & PHP</span>
+              </h3>
+
+              <!-- Python Snippet -->
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+                <div class="text-[10px] text-emerald-400 mb-2 font-sans font-semibold">Python (requests):</div>
+<pre><code>import requests
+
+API_URL = "http://localhost:3000/api/v1/messages/send-text"
+HEADERS = {"X-Api-Key": "YOUR_API_KEY", "Content-Type": "application/json"}
+
+payload = {
+    "sessionId": "YOUR_SESSION_ID",
+    "to": "919999846226",
+    "text": "Hello from Python WhatsApp Bot! 🤖"
+}
+
+response = requests.post(API_URL, json=payload, headers=HEADERS)
+print(response.json())</code></pre>
+              </div>
+
+              <!-- Node.js Fetch Snippet -->
+              <div class="relative bg-slate-950 rounded-xl p-4 border border-slate-800 font-mono text-xs text-slate-300 overflow-x-auto">
+                <div class="text-[10px] text-emerald-400 mb-2 font-sans font-semibold">Node.js (Fetch API):</div>
+<pre><code>const response = await fetch('http://localhost:3000/api/v1/messages/send-text', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Api-Key': 'YOUR_API_KEY',
+  },
+  body: JSON.stringify({
+    sessionId: 'YOUR_SESSION_ID',
+    to: '919999846226',
+    text: 'Hello from Node.js server! 🚀',
+  }),
+});
+const data = await response.json();
+console.log(data);</code></pre>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: CREATE SESSION ================= -->
+  <div id="newSessionModal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-bold text-white">Connect New WhatsApp Session</h3>
+        <button onclick="closeNewSessionModal()" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+      <form onsubmit="handleCreateSession(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Session Identifier Name</label>
+          <input type="text" id="newSessionName" required placeholder="e.g. Sales_Bot or Support_Line" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Optional Webhook URL for this session</label>
+          <input type="url" id="newSessionWebhook" placeholder="https://..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500">
+        </div>
+        <button type="submit" class="w-full py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-xl text-xs transition">
+          Create & Get QR Code
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: QR CODE SCANNER ================= -->
+  <div id="qrModal" class="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 hidden">
+    <div class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-bold text-white" id="qrModalTitle">Scan WhatsApp QR Code</h3>
+        <button onclick="closeQrModal()" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+      
+      <!-- QR Image Display -->
+      <div class="p-4 bg-white rounded-2xl inline-block shadow-xl">
+        <img id="qrImage" src="" alt="WhatsApp QR Code" class="w-64 h-64 object-contain">
+      </div>
+
+      <!-- Pairing Code Alternative Option -->
+      <div class="pt-2 border-t border-slate-800">
+        <p class="text-xs text-slate-400 mb-2">Or connect via 8-Digit Pairing Code:</p>
+        <div class="flex gap-2">
+          <input type="text" id="pairingPhoneInput" placeholder="Phone e.g. 14155552671" class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white">
+          <button onclick="handleRequestPairingCode()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 font-semibold rounded-xl text-xs">Get Code</button>
+        </div>
+        <div id="pairingCodeDisplay" class="mt-2 text-sm font-mono font-bold text-emerald-400 tracking-widest hidden"></div>
+      </div>
+
+      <p class="text-[11px] text-slate-500">Open WhatsApp > Linked Devices > Link a Device</p>
+    </div>
+  </div>
+
+  <!-- ================= MODAL: IMAGE / MEDIA LIGHTBOX ================= -->
+  <div id="mediaLightboxModal" class="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-4 hidden" onclick="closeMediaLightbox()">
+    <div class="absolute top-4 right-4 flex items-center gap-3 z-10" onclick="event.stopPropagation()">
+      <a id="lightboxDownloadBtn" href="" download class="p-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl transition flex items-center gap-1.5 text-xs">
+        <i data-lucide="download" class="w-4 h-4"></i>
+        <span>Download</span>
+      </a>
+      <button onclick="closeMediaLightbox()" class="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl transition">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+    <div class="max-w-4xl max-h-[85vh] flex items-center justify-center overflow-hidden rounded-2xl" onclick="event.stopPropagation()">
+      <img id="lightboxImage" src="" alt="Full view" class="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl">
+    </div>
+    <div id="lightboxCaption" class="mt-3 text-xs text-slate-300 text-center max-w-lg"></div>
+  </div>
+
+  <!-- ================= MODAL: EDIT CONTACT ================= -->
+  <div id="editContactModal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+          <i data-lucide="user-pen" class="w-4 h-4 text-emerald-400"></i>
+          <span>Edit Contact Details</span>
+        </h3>
+        <button onclick="closeEditContactModal()" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+      <form onsubmit="handleSaveContact(event)" class="space-y-3">
+        <input type="hidden" id="editContactJid">
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Contact Name / Nickname</label>
+          <input type="text" id="editContactName" placeholder="e.g. Reema Verma or Client" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Mobile Phone Number</label>
+          <input type="text" id="editContactPhone" placeholder="e.g. +91 9999846226" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-mono">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Upload DP / Profile Picture (Optional)</label>
+          <input type="file" id="editContactAvatarFile" accept="image/*" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-400 file:mr-2 file:py-1 file:px-2.5 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-500/10 file:text-emerald-400 hover:file:bg-emerald-500/20">
+        </div>
+        <button type="submit" class="w-full py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20">
+          <i data-lucide="check" class="w-4 h-4"></i>
+          <span>Save Contact Details</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Javascript Application Files -->
+  <script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# Render Deployment Config
+# Save as render.yaml in your project root
+
+services:
+  - type: web
+    name: whatsapp-saas-gateway
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: node dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+      - key: SESSIONS_DIR
+        value: /opt/render/project/src/data/sessions
+      - key: MEDIA_DIR
+        value: /opt/render/project/src/data/media
+      - key: DB_PATH
+        value: /opt/render/project/src/data/gateway.sqlite
+    # Health check for Render
+    healthCheckPath: /api/health
+    # Auto-deploy on push to main
+    autoDeploy: true
