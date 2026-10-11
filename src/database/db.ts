@@ -80,9 +80,16 @@ export async function initDatabase() {
   // Ensure /tmp/data exists first
   ensureTmpDataDir();
 
-  // Locate WASM file - Vercel bundles to /var/task/dist/
+  // Locate WASM file - Vercel bundles to /var/task/dist/, Render copies to dist/
   const isVercel = !!process.env.VERCEL;
+  const isRender = !!process.env.RENDER;
   const wasmLocations = isVercel
+    ? [
+        path.join(__dirname, 'sql-wasm.wasm'),
+        path.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
+        path.join(process.cwd(), 'sql-wasm.wasm'),
+      ]
+    : isRender
     ? [
         path.join(__dirname, 'sql-wasm.wasm'),
         path.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
@@ -100,8 +107,15 @@ export async function initDatabase() {
     }
   }
 
+  if (!wasmPath) {
+    console.error('❌ sql-wasm.wasm not found in any location:', wasmLocations);
+    throw new Error('sql-wasm.wasm not found');
+  }
+
+  console.log('📦 Loading sql-wasm.wasm from:', wasmPath);
+
   const SQLModule = await initSqlJs({
-    locateFile: () => wasmPath || 'sql-wasm.wasm',
+    locateFile: () => wasmPath,
   });
 
   SQL = SQLModule;

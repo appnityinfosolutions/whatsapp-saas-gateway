@@ -10,8 +10,8 @@ const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const config_1 = require("./config");
-const db_pg_1 = require("./database/db.pg");
-const whatsapp_service_pg_1 = require("./services/whatsapp.service.pg");
+const db_1 = require("./database/db");
+const whatsapp_service_1 = require("./services/whatsapp.service");
 const auth_service_1 = require("./services/auth.service");
 const api_routes_1 = __importDefault(require("./routes/api.routes"));
 const app = (0, express_1.default)();
@@ -23,7 +23,7 @@ const io = new socket_io_1.Server(server, {
     },
 });
 // Pass Socket.IO instance to WhatsApp Service for real-time events
-whatsapp_service_pg_1.WhatsAppService.setSocketIO(io);
+whatsapp_service_1.WhatsAppService.setSocketIO(io);
 // Middlewares
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '50mb' }));
@@ -68,41 +68,20 @@ app.get('*', (req, res) => {
 });
 // Initialize Database and Start Server
 async function startServer() {
-    try {
-        await (0, db_pg_1.initDatabase)();
-        server.listen(config_1.config.port, async () => {
-            console.log(`
+    await (0, db_1.initDatabase)();
+    server.listen(config_1.config.port, async () => {
+        console.log(`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🚀 WhatsApp Multi-Tenant SaaS Gateway is LIVE!
 🌐 Dashboard UI:      http://localhost:${config_1.config.port}
 📚 REST API Base:     http://localhost:${config_1.config.port}/api/v1
 💚 Health Endpoint:   http://localhost:${config_1.config.port}/api/health
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      `);
-            // Auto-reconnect saved WhatsApp sessions
-            await whatsapp_service_pg_1.WhatsAppService.autoStartSavedSessions();
-        });
-    }
-    catch (err) {
-        console.error('Fatal Server Boot Error:', err);
-        process.exit(1);
-    }
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    `);
+        // Auto-reconnect saved WhatsApp sessions
+        await whatsapp_service_1.WhatsAppService.autoStartSavedSessions();
+    });
 }
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-    console.log('SIGTERM received, shutting down gracefully...');
-    server.close(async () => {
-        await (0, db_pg_1.closeDatabase)();
-        console.log('Server closed');
-        process.exit(0);
-    });
+startServer().catch((err) => {
+    console.error('Fatal Server Boot Error:', err);
 });
-process.on('SIGINT', async () => {
-    console.log('SIGINT received, shutting down gracefully...');
-    server.close(async () => {
-        await (0, db_pg_1.closeDatabase)();
-        console.log('Server closed');
-        process.exit(0);
-    });
-});
-startServer();

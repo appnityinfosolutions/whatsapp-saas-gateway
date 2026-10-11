@@ -5,8 +5,8 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { config } from './config';
-import { initDatabase, closeDatabase } from './database/db.pg';
-import { WhatsAppService } from './services/whatsapp.service.pg';
+import { initDatabase } from './database/db';
+import { WhatsAppService } from './services/whatsapp.service';
 import { AuthService } from './services/auth.service';
 import apiRoutes from './routes/api.routes';
 
@@ -74,45 +74,23 @@ app.get('*', (req, res) => {
 
 // Initialize Database and Start Server
 async function startServer() {
-  try {
-    await initDatabase();
+  await initDatabase();
 
-    server.listen(config.port, async () => {
-      console.log(`
+  server.listen(config.port, async () => {
+    console.log(`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🚀 WhatsApp Multi-Tenant SaaS Gateway is LIVE!
 🌐 Dashboard UI:      http://localhost:${config.port}
 📚 REST API Base:     http://localhost:${config.port}/api/v1
 💚 Health Endpoint:   http://localhost:${config.port}/api/health
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-      `);
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    `);
 
-      // Auto-reconnect saved WhatsApp sessions
-      await WhatsAppService.autoStartSavedSessions();
-    });
-  } catch (err) {
-    console.error('Fatal Server Boot Error:', err);
-    process.exit(1);
-  }
+    // Auto-reconnect saved WhatsApp sessions
+    await WhatsAppService.autoStartSavedSessions();
+  });
 }
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down gracefully...');
-  server.close(async () => {
-    await closeDatabase();
-    console.log('Server closed');
-    process.exit(0);
-  });
+startServer().catch((err) => {
+  console.error('Fatal Server Boot Error:', err);
 });
-
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, shutting down gracefully...');
-  server.close(async () => {
-    await closeDatabase();
-    console.log('Server closed');
-    process.exit(0);
-  });
-});
-
-startServer();

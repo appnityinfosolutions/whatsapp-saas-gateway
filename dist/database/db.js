@@ -79,17 +79,24 @@ exports.db = {
 async function initDatabase() {
     // Ensure /tmp/data exists first
     ensureTmpDataDir();
-    // Locate WASM file - Vercel bundles to /var/task/dist/
+    // Locate WASM file - Vercel bundles to /var/task/dist/, Render copies to dist/
     const isVercel = !!process.env.VERCEL;
+    const isRender = !!process.env.RENDER;
     const wasmLocations = isVercel
         ? [
             path_1.default.join(__dirname, 'sql-wasm.wasm'),
             path_1.default.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
             path_1.default.join(process.cwd(), 'sql-wasm.wasm'),
         ]
-        : [
-            path_1.default.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-        ];
+        : isRender
+            ? [
+                path_1.default.join(__dirname, 'sql-wasm.wasm'),
+                path_1.default.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
+                path_1.default.join(process.cwd(), 'sql-wasm.wasm'),
+            ]
+            : [
+                path_1.default.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+            ];
     let wasmPath = '';
     for (const loc of wasmLocations) {
         if (fs_1.default.existsSync(loc)) {
@@ -97,8 +104,13 @@ async function initDatabase() {
             break;
         }
     }
+    if (!wasmPath) {
+        console.error('❌ sql-wasm.wasm not found in any location:', wasmLocations);
+        throw new Error('sql-wasm.wasm not found');
+    }
+    console.log('📦 Loading sql-wasm.wasm from:', wasmPath);
     const SQLModule = await (0, sql_js_1.default)({
-        locateFile: () => wasmPath || 'sql-wasm.wasm',
+        locateFile: () => wasmPath,
     });
     SQL = SQLModule;
     // Load existing database file if present

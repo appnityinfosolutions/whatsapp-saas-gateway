@@ -3,8 +3,8 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { config } from './config';
-import { initDatabase } from './database/db.pg';
-import { WhatsAppService } from './services/whatsapp.service.pg';
+import { initDatabase } from './database/db';
+import { WhatsAppService } from './services/whatsapp.service';
 import { AuthService } from './services/auth.service';
 import apiRoutes from './routes/api.routes';
 
