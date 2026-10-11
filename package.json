@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc && cp node_modules/sql.js/dist/sql-wasm.wasm dist/",
+    "build": "tsc && node -e \"const fs=require('fs'); const src='node_modules/sql.js/dist/sql-wasm.wasm'; const dest='dist/sql-wasm.wasm'; if(fs.existsSync(src)){fs.copyFileSync(src, dest); console.log('Copied sql-wasm.wasm to dist/');} else {console.error('Source not found:', src); process.exit(1);}\"",
     "start": "node dist/index.js"
   },
   "dependencies": {
