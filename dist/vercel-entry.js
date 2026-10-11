@@ -8,13 +8,13 @@ const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const config_1 = require("./config");
-const db_1 = require("./database/db");
+const db_pg_1 = require("./database/db.pg");
 const api_routes_1 = __importDefault(require("./routes/api.routes"));
 // Initialize database on cold start
 let dbInitialized = false;
 async function ensureDb() {
     if (!dbInitialized) {
-        await (0, db_1.initDatabase)();
+        await (0, db_pg_1.initDatabase)();
         dbInitialized = true;
     }
 }
