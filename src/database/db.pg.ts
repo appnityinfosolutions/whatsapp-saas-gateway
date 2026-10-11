@@ -2,63 +2,57 @@ import { Pool } from 'pg';
 import Redis from 'ioredis';
 import { config } from '../config';
 
-let pgPool: Pool | null = null;
-let redisClient: any = null;
+let pgPool: Pool;
+let redisClient: Redis;
 
-export async function initDatabase() {
-  // Initialize PostgreSQL pool if DATABASE_URL is set
-  const pgUrl = process.env.DATABASE_URL || `postgresql://${process.env.PGUSER}:***@${process.env.PGHOST}:${process.env.PGPORT}/${process.env.PGDATABASE}`;
+export function initDatabase() {
+  // Initialize PostgreSQL pool
+  const pgUrl = process.env.DATABASE_URL || `postgresql://${process.env.PGUSER}:${process.env.PGPASSWORD}@${process.env.PGHOST}:${process.env.PGPORT}/${process.env.PGDATABASE}`;
   
-  if (process.env.DATABASE_URL || process.env.PGHOST) {
-    console.log('🐘 Initializing PostgreSQL...');
-    pgPool = new Pool({
-      connectionString: process.env.DATABASE_URL || `postgresql://${process.env.PGUSER}:***@${process.env.PGHOST}:${process.env.PGPORT}/${process.env.PGDATABASE}`,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-    });
-
-    pgPool.on('error', (err: Error) => {
-        console.error('❌ PostgreSQL pool error:', err);
-      });
-
-    console.log('✅ PostgreSQL pool initialized');
-    await setUsePostgres(true);
-  
-    // Initialize tables
-    await initPgTables();
-  } else {
-    console.warn('⚠️ No PostgreSQL config found, using SQLite fallback');
-    await setUsePostgres(false);
-    await initSQLite();
+  if (!process.env.DATABASE_URL && !process.env.PGHOST) {
+    console.warn('⚠️ No PostgreSQL config found, falling back to SQLite');
+    return Promise.resolve();
   }
+
+  pgPool = new Pool({
+    connectionString: pgUrl,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  });
+
+  pgPool.on('error', (err) => {
+    console.error('❌ PostgreSQL pool error:', err);
+  });
+
+  console.log('✅ PostgreSQL pool initialized');
 
   // Initialize Redis
   const redisUrl = process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`;
   
-  if (process.env.REDIS_URL || process.env.REDIS_HOST) {
-    console.log('🔴 Initializing Redis...');
-    const Redis = (await import('ioredis')).default;
-    redisClient = new Redis(process.env.REDIS_URL || `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`, {
-      maxRetriesPerRequest: 3,
-      retryStrategy: (times) => Math.min(times * 50, 2000),
-    });
-
-    redisClient.on('error', (err: Error) => {
-        console.error('❌ Redis error:', err);
-      });
-
-    redisClient.on('connect', () => {
-      console.log('✅ Redis connected');
-    });
-
-    console.log('✅ Redis client initialized');
-  } else {
+  if (!process.env.REDIS_URL && !process.env.REDIS_HOST) {
     console.warn('⚠️ No Redis config found, using in-memory fallback');
+    return initInMemoryFallback();
   }
+
+  redisClient = new Redis(redisUrl, {
+    maxRetriesPerRequest: 3,
+    retryStrategy: (times) => Math.min(times * 50, 2000),
+  });
+
+  redisClient.on('error', (err) => {
+    console.error('❌ Redis error:', err);
+  });
+
+  redisClient.on('connect', () => {
+    console.log('✅ Redis connected');
+  });
+
+  console.log('✅ Redis client initialized');
+
+  // Initialize tables
+  return initPgTables();
 }
 
 async function initPgTables() {
-  if (!pgPool) return;
-  
   const client = await pgPool.connect();
   try {
     await client.query(`
@@ -181,98 +175,57 @@ function initInMemoryFallback() {
 }
 
 // --- PostgreSQL wrapper (compatible with existing db API) ---
-// Supports both PostgreSQL (Render) and SQLite (local/Vercel)
-let usePostgres = false;
-
-export async function setUsePostgres(value: boolean) {
-  usePostgres = value;
-}
-
 export const pgDb = {
   async exec(sql: string, params?: any[]) {
-    if (usePostgres) {
-      if (!pgPool) throw new Error('PostgreSQL not initialized');
-      if (params && params.length > 0) {
-        await pgPool.query(sql, params);
-      } else {
-        await pgPool.query(sql);
-      }
+    if (params && params.length > 0) {
+      await pgPool.query(sql, params);
     } else {
-      // Fallback to SQLite db
-      const { db } = await import('./db');
-      db.exec(sql);
+      await pgPool.query(sql);
     }
   },
 
   prepare(sql: string) {
-    if (usePostgres) {
-      if (!pgPool) throw new Error('PostgreSQL not initialized');
-      return {
-        async run(...params: any[]) {
-          const result = await pgPool!.query(sql, params);
-          return { changes: result.rowCount };
-        },
+    return {
+      async run(...params: any[]) {
+        const result = await pgPool.query(sql, params);
+        return { changes: result.rowCount };
+      },
 
-        async get(...params: any[]) {
-          const result = await pgPool!.query(sql, params);
-          return result.rows[0] || null;
-        },
+      async get(...params: any[]) {
+        const result = await pgPool.query(sql, params);
+        return result.rows[0] || null;
+      },
 
-        async all(...params: any[]) {
-          const result = await pgPool!.query(sql, params);
-          return result.rows;
-        },
-      };
-    } else {
-      // Fallback to SQLite db - sync version
-      const { db } = require('./db');
-      return db.prepare(sql);
-    }
+      async all(...params: any[]) {
+        const result = await pgPool.query(sql, params);
+        return result.rows;
+      },
+    };
   },
 };
 
 // --- Redis wrapper for Baileys auth state ---
-const memoryStore: Map<string, any> = new Map();
-
 export const redisAuthStore = {
   async get(key: string) {
-    if (redisClient) {
-      const data = await redisClient.get(key);
-      return data ? JSON.parse(data) : null;
-    }
-    return memoryStore.get(key) || null;
+    const data = await redisClient.get(key);
+    return data ? JSON.parse(data) : null;
   },
 
   async set(key: string, value: any, ttlSeconds?: number) {
     const serialized = JSON.stringify(value);
-    if (redisClient) {
-      if (ttlSeconds) {
-        await redisClient.setex(key, ttlSeconds, JSON.stringify(value));
-      } else {
-        await redisClient.set(key, JSON.stringify(value));
-      }
+    if (ttlSeconds) {
+      await redisClient.setex(key, ttlSeconds, serialized);
     } else {
-      memoryStore.set(key, value);
-      if (ttlSeconds) {
-        setTimeout(() => memoryStore.delete(key), ttlSeconds * 1000);
-      }
+      await redisClient.set(key, serialized);
     }
   },
 
   async del(key: string) {
-    if (redisClient) {
-      await redisClient.del(key);
-    } else {
-      memoryStore.delete(key);
-    }
+    await redisClient.del(key);
   },
 
   async keys(pattern: string) {
-    if (redisClient) {
-      return redisClient.keys(pattern);
-    }
-    const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-    return Array.from(memoryStore.keys()).filter(k => regex.test(k));
+    return redisClient.keys(pattern);
   },
 };
 
@@ -280,5 +233,3 @@ export async function closeDatabase() {
   if (pgPool) await pgPool.end();
   if (redisClient) await redisClient.quit();
 }
-
-export { pgPool, redisClient };
