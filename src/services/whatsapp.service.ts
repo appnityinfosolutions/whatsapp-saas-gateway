@@ -80,6 +80,14 @@ export class WhatsAppService {
       browser: ['WhatsApp SaaS Gateway', 'Chrome', '124.0.0'],
       generateHighQualityLinkPreview: true,
       syncFullHistory: true,
+      // Connection stability improvements
+      keepAliveIntervalMs: 30000, // Send ping every 30 seconds
+      markOnlineOnConnect: true,
+      // Reconnection settings
+      retryRequestDelayMs: 500,
+      maxMsgRetryCount: 5,
+      // Link preview settings
+      linkPreviewImageThumbnailWidth: 192,
     });
 
     this.sockets.set(sessionId, sock);
@@ -117,10 +125,18 @@ export class WhatsAppService {
           this.emitToUser(userId, 'session_status', { sessionId, status: 'DISCONNECTED' });
 
           if (shouldReconnect && session.is_auto_reconnect) {
-            console.log(`[Session ${sessionId}] Connection closed, reconnecting in 5s...`);
+            // Exponential backoff: 5s, 10s, 20s, 40s, max 60s
+            const attempt = (session.reconnectAttempt || 0) + 1;
+            const delayMs = Math.min(5000 * Math.pow(2, attempt - 1), 60000);
+            
+            console.log(`[Session ${sessionId}] Connection closed (code: ${statusCode}), reconnecting in ${delayMs/1000}s (attempt ${attempt})...`);
+            
+            // Update attempt counter
+            db.prepare("UPDATE sessions SET reconnect_attempt = ? WHERE id = ?").run(attempt, sessionId);
+            
             setTimeout(() => {
               this.startSession(userId, sessionId).catch(console.error);
-            }, 5000);
+            }, delayMs);
           }
         }
 
@@ -152,6 +168,9 @@ export class WhatsAppService {
 
         this.emitToUser(userId, 'session_status', { sessionId, status: 'CONNECTED', phone, pushName });
         console.log(`✅ [Session ${session.session_name}] WhatsApp Connected: +${phone} (${pushName})`);
+
+        // Reset reconnect attempt on successful connection
+        db.prepare("UPDATE sessions SET reconnect_attempt = 0 WHERE id = ?").run(sessionId);
 
         WebhookService.sendWebhook(userId, sessionId, 'session.status', { status: 'CONNECTED', phone, pushName });
       }

@@ -10,6 +10,23 @@ let activeSessionIdForModal = null;
 let activeChatRemoteJid = null;
 let currentActiveSessionForChat = null;
 
+// Copy to clipboard helper
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    showToast('Copied!');
+  }).catch(() => {
+    showToast('Failed to copy');
+  });
+}
+
+function showToast(msg) {
+  const toast = document.createElement('div');
+  toast.className = 'fixed bottom-4 right-4 bg-emerald-500 text-slate-950 px-4 py-2 rounded-xl text-xs font-semibold shadow-lg z-50 animate-slide-up';
+  toast.innerText = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2000);
+}
+
 // Initialize app on load
 document.addEventListener('DOMContentLoaded', () => {
   if (window.lucide) lucide.createIcons();
@@ -308,30 +325,26 @@ async function loadSessions() {
 
                         <div class="space-y-1.5 text-xs text-slate-400">
                           <div class="flex items-center gap-2">
-                            <i data-lucide="hash" class="w-3.5 h-3.5 text-slate-500"></i>
-                            <span class="font-mono text-white text-[10px] truncate max-w-[150px]" title="${s.id}">${s.id}</span>
-                          </div>
+                                                      <i data-lucide="hash" class="w-3.5 h-3.5 text-slate-500"></i>
+                                                      <div class="flex items-center gap-1.5 flex-1 min-w-0">
+                                                        <span class="font-mono text-white text-[10px] truncate max-w-[150px]">${s.id}</span>
+                                                        <button onclick="copyToClipboard('${s.id}')" class="p-1 text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 rounded transition" title="Copy Session ID">
+                                                          <i data-lucide="copy" class="w-3 h-3"></i>
+                                                        </button>
+                                                      </div>
+                                                    </div>
                           <div class="flex items-center gap-2">
                             <i data-lucide="phone" class="w-3.5 h-3.5 text-slate-500"></i>
                             <span class="font-mono text-white">${s.phone_number ? '+' + s.phone_number : 'Not Connected'}</span>
                           </div>
               <div class="flex items-center gap-2">
-                <i data-lucide="user" class="w-3.5 h-3.5 text-slate-500"></i>
-                <span>${s.push_name || '—'}</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <i data-lucide="calendar" class="w-3.5 h-3.5 text-slate-500"></i>
-                <span class="text-[10px] text-slate-500 font-mono">${new Date(s.created_at).toLocaleDateString()}</span>
-              </div>
-              <div class="flex items-center justify-between gap-2">
-                <div class="flex items-center gap-2 min-w-0 flex-1">
-                  <i data-lucide="fingerprint" class="w-3.5 h-3.5 text-slate-500 shrink-0"></i>
-                  <span class="text-[10px] text-slate-400 font-mono truncate select-all" title="Session ID: ${s.id}"><span class="text-slate-500">ID:</span> ${s.id}</span>
-                </div>
-                <button type="button" onclick="copySessionId('${s.id}', this)" class="text-slate-500 hover:text-emerald-400 transition shrink-0 p-0.5 rounded hover:bg-slate-800" title="Copy Session ID">
-                  <i data-lucide="copy" class="w-3 h-3"></i>
-                </button>
-              </div>
+                              <i data-lucide="user" class="w-3.5 h-3.5 text-slate-500"></i>
+                              <span>${s.push_name || '—'}</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                              <i data-lucide="calendar" class="w-3.5 h-3.5 text-slate-500"></i>
+                              <span class="text-[10px] text-slate-500 font-mono">${new Date(s.created_at).toLocaleDateString()}</span>
+                            </div>
             </div>
           </div>
 

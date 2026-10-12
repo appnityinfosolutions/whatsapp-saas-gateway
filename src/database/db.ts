@@ -174,6 +174,7 @@ export async function initDatabase() {
       pairing_code TEXT,
       webhook_url TEXT,
       is_auto_reconnect INTEGER DEFAULT 1,
+      reconnect_attempt INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
