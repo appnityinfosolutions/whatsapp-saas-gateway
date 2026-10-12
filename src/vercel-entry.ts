@@ -50,12 +50,24 @@ app.get('/api/health', async (req, res) => {
 // API Routes
 app.use('/api/v1', apiRoutes);
 
+// Unknown API routes must return a JSON 404 instead of hanging.
+app.use('/api', (req, res) => {
+  res.status(404).json({ success: false, error: `Not found: ${req.method} ${req.originalUrl}` });
+});
+
 // Fallback SPA routing for Dashboard
 app.get('*', async (req, res) => {
   if (!req.path.startsWith('/api')) {
     await ensureDb();
     res.sendFile(path.join(publicDir, 'index.html'));
   }
+});
+
+// Central error handler: always answer with JSON, never an empty body.
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('Unhandled request error:', err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ success: false, error: 'Internal server error' });
 });
 
 // Export for Vercel serverless

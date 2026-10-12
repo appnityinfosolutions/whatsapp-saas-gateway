@@ -128,81 +128,93 @@ class WhatsAppService {
         this.sockets.set(sessionId, sock);
         sock.ev.on('creds.update', saveCreds);
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-            if (qr) {
-                try {
-                    const qrDataUrl = await qrcode_1.default.toDataURL(qr, { width: 300, margin: 2 });
-                    db_1.db.prepare("UPDATE sessions SET status = 'SCAN_QR', qr_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(qrDataUrl, sessionId);
-                    this.emitToUser(userId, 'session_qr', { sessionId, qr: qrDataUrl });
+            try {
+                const { connection, lastDisconnect, qr } = update;
+                if (qr) {
+                    try {
+                        const qrDataUrl = await qrcode_1.default.toDataURL(qr, { width: 300, margin: 2 });
+                        db_1.db.prepare("UPDATE sessions SET status = 'SCAN_QR', qr_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(qrDataUrl, sessionId);
+                        this.emitToUser(userId, 'session_qr', { sessionId, qr: qrDataUrl });
+                    }
+                    catch (e) {
+                        console.error('Error generating QR Code data URL:', e);
+                    }
                 }
-                catch (e) {
-                    console.error('Error generating QR Code data URL:', e);
+                if (connection === 'close') {
+                    const statusCode = lastDisconnect?.error?.output?.statusCode;
+                    const isLoggedOut = statusCode === baileys_1.DisconnectReason.loggedOut;
+                    // 515 (restartRequired) is sent by WhatsApp right after a QR code is scanned so
+                    // the client can restart the socket and finish linking. Reconnect immediately
+                    // and DO NOT clear credentials, otherwise the pairing is lost forever.
+                    const isRestartRequired = statusCode === baileys_1.DisconnectReason.restartRequired;
+                    const shouldReconnect = !isLoggedOut;
+                    this.sockets.delete(sessionId);
+                    if (isLoggedOut) {
+                        db_1.db.prepare("UPDATE sessions SET status = 'LOGGED_OUT', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
+                        this.emitToUser(userId, 'session_status', { sessionId, status: 'LOGGED_OUT' });
+                        // Credentials are no longer valid: clear them so a fresh QR can be generated.
+                        try {
+                            fs_1.default.rmSync(sessionDir, { recursive: true, force: true });
+                        }
+                        catch { }
+                    }
+                    else {
+                        db_1.db.prepare("UPDATE sessions SET status = 'DISCONNECTED', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
+                        this.emitToUser(userId, 'session_status', { sessionId, status: 'DISCONNECTED' });
+                        if (shouldReconnect && session.is_auto_reconnect) {
+                            // restartRequired reconnects almost instantly; other drops back off
+                            // exponentially (5s, 10s, 20s, 40s, max 60s).
+                            const attempt = isRestartRequired ? 0 : (session.reconnect_attempt || 0) + 1;
+                            const delayMs = isRestartRequired ? 300 : Math.min(5000 * Math.pow(2, attempt - 1), 60000);
+                            console.log(`[Session ${sessionId}] Connection closed (code: ${statusCode}), reconnecting in ${delayMs}ms (attempt ${attempt})...`);
+                            // Update attempt counter
+                            db_1.db.prepare("UPDATE sessions SET reconnect_attempt = ? WHERE id = ?").run(attempt, sessionId);
+                            setTimeout(() => {
+                                // Skip if a newer socket already exists (the user restarted the session)
+                                // or the session was stopped/removed while this timer was pending.
+                                if (this.sockets.has(sessionId))
+                                    return;
+                                const current = db_1.db.prepare('SELECT status FROM sessions WHERE id = ?').get(sessionId);
+                                if (!current || current.status === 'STOPPED' || current.status === 'LOGGED_OUT')
+                                    return;
+                                this.startSession(userId, sessionId).catch(console.error);
+                            }, delayMs);
+                        }
+                    }
+                    webhook_service_1.WebhookService.sendWebhook(userId, sessionId, 'session.status', { status: isLoggedOut ? 'LOGGED_OUT' : 'DISCONNECTED', statusCode });
+                }
+                else if (connection === 'open') {
+                    const phone = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : '';
+                    const pushName = sock.user?.name || '';
+                    const meLid = sock.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : '';
+                    db_1.db.prepare(`
+            UPDATE sessions 
+            SET status = 'CONNECTED', qr_code = NULL, phone_number = ?, push_name = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE id = ?
+          `).run(phone, pushName, sessionId);
+                    // Map self LID to user's phone number & name
+                    if (meLid) {
+                        try {
+                            db_1.db.prepare(`
+                INSERT INTO contacts (id, user_id, session_id, jid, name, phone_number, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(session_id, jid) DO UPDATE SET
+                  name = excluded.name,
+                  phone_number = excluded.phone_number,
+                  updated_at = CURRENT_TIMESTAMP
+              `).run(`${sessionId}_${meLid}@lid`, userId, sessionId, `${meLid}@lid`, `You (${session.session_name || 'My Number'})`, phone);
+                        }
+                        catch { }
+                    }
+                    this.emitToUser(userId, 'session_status', { sessionId, status: 'CONNECTED', phone, pushName });
+                    console.log(`✅ [Session ${session.session_name}] WhatsApp Connected: +${phone} (${pushName})`);
+                    // Reset reconnect attempt on successful connection
+                    db_1.db.prepare("UPDATE sessions SET reconnect_attempt = 0 WHERE id = ?").run(sessionId);
+                    webhook_service_1.WebhookService.sendWebhook(userId, sessionId, 'session.status', { status: 'CONNECTED', phone, pushName });
                 }
             }
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const isLoggedOut = statusCode === baileys_1.DisconnectReason.loggedOut;
-                // 515 (restartRequired) is sent by WhatsApp right after a QR code is scanned so
-                // the client can restart the socket and finish linking. Reconnect immediately
-                // and DO NOT clear credentials, otherwise the pairing is lost forever.
-                const isRestartRequired = statusCode === baileys_1.DisconnectReason.restartRequired;
-                const shouldReconnect = !isLoggedOut;
-                this.sockets.delete(sessionId);
-                if (isLoggedOut) {
-                    db_1.db.prepare("UPDATE sessions SET status = 'LOGGED_OUT', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
-                    this.emitToUser(userId, 'session_status', { sessionId, status: 'LOGGED_OUT' });
-                    // Credentials are no longer valid: clear them so a fresh QR can be generated.
-                    try {
-                        fs_1.default.rmSync(sessionDir, { recursive: true, force: true });
-                    }
-                    catch { }
-                }
-                else {
-                    db_1.db.prepare("UPDATE sessions SET status = 'DISCONNECTED', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
-                    this.emitToUser(userId, 'session_status', { sessionId, status: 'DISCONNECTED' });
-                    if (shouldReconnect && session.is_auto_reconnect) {
-                        // restartRequired reconnects almost instantly; other drops back off
-                        // exponentially (5s, 10s, 20s, 40s, max 60s).
-                        const attempt = isRestartRequired ? 0 : (session.reconnect_attempt || 0) + 1;
-                        const delayMs = isRestartRequired ? 300 : Math.min(5000 * Math.pow(2, attempt - 1), 60000);
-                        console.log(`[Session ${sessionId}] Connection closed (code: ${statusCode}), reconnecting in ${delayMs}ms (attempt ${attempt})...`);
-                        // Update attempt counter
-                        db_1.db.prepare("UPDATE sessions SET reconnect_attempt = ? WHERE id = ?").run(attempt, sessionId);
-                        setTimeout(() => {
-                            this.startSession(userId, sessionId).catch(console.error);
-                        }, delayMs);
-                    }
-                }
-                webhook_service_1.WebhookService.sendWebhook(userId, sessionId, 'session.status', { status: isLoggedOut ? 'LOGGED_OUT' : 'DISCONNECTED', statusCode });
-            }
-            else if (connection === 'open') {
-                const phone = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : '';
-                const pushName = sock.user?.name || '';
-                const meLid = sock.user?.lid ? sock.user.lid.split(':')[0].split('@')[0] : '';
-                db_1.db.prepare(`
-          UPDATE sessions 
-          SET status = 'CONNECTED', qr_code = NULL, phone_number = ?, push_name = ?, updated_at = CURRENT_TIMESTAMP 
-          WHERE id = ?
-        `).run(phone, pushName, sessionId);
-                // Map self LID to user's phone number & name
-                if (meLid) {
-                    try {
-                        db_1.db.prepare(`
-              INSERT INTO contacts (id, user_id, session_id, jid, name, phone_number, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-              ON CONFLICT(session_id, jid) DO UPDATE SET
-                name = excluded.name,
-                phone_number = excluded.phone_number,
-                updated_at = CURRENT_TIMESTAMP
-            `).run(`${sessionId}_${meLid}@lid`, userId, sessionId, `${meLid}@lid`, `You (${session.session_name || 'My Number'})`, phone);
-                    }
-                    catch { }
-                }
-                this.emitToUser(userId, 'session_status', { sessionId, status: 'CONNECTED', phone, pushName });
-                console.log(`✅ [Session ${session.session_name}] WhatsApp Connected: +${phone} (${pushName})`);
-                // Reset reconnect attempt on successful connection
-                db_1.db.prepare("UPDATE sessions SET reconnect_attempt = 0 WHERE id = ?").run(sessionId);
-                webhook_service_1.WebhookService.sendWebhook(userId, sessionId, 'session.status', { status: 'CONNECTED', phone, pushName });
+            catch (err) {
+                console.error(`[Session ${sessionId}] connection.update handler failed:`, err);
             }
         });
         // History and Contacts sync listener
@@ -269,119 +281,124 @@ class WhatsAppService {
         });
         // Inbound Messages Listener
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type !== 'notify')
-                return;
-            for (const msg of messages) {
-                if (!msg.message)
-                    continue;
-                const remoteJid = msg.key.remoteJid || '';
-                const fromMe = msg.key.fromMe ? 1 : 0;
-                const messageId = msg.key.id || '';
-                const timestamp = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp || Date.now() / 1000);
-                const pushName = msg.pushName || '';
-                let body = '';
-                let mediaType = 'text';
-                let mediaCaption = '';
-                let mediaUrl = null;
-                if (msg.message.conversation) {
-                    body = msg.message.conversation;
-                }
-                else if (msg.message.extendedTextMessage?.text) {
-                    body = msg.message.extendedTextMessage.text;
-                }
-                else if (msg.message.imageMessage) {
-                    mediaType = 'image';
-                    mediaCaption = msg.message.imageMessage.caption || '';
-                    body = mediaCaption || '[Image]';
-                }
-                else if (msg.message.videoMessage) {
-                    mediaType = 'video';
-                    mediaCaption = msg.message.videoMessage.caption || '';
-                    body = mediaCaption || '[Video]';
-                }
-                else if (msg.message.audioMessage) {
-                    mediaType = 'audio';
-                    body = '[Audio Voice Message]';
-                }
-                else if (msg.message.documentMessage) {
-                    mediaType = 'document';
-                    mediaCaption = msg.message.documentMessage.fileName || 'document.pdf';
-                    body = mediaCaption;
-                }
-                else if (msg.message.stickerMessage) {
-                    mediaType = 'sticker';
-                    body = '[Sticker]';
-                }
-                const msgRecordId = (0, uuid_1.v4)();
-                // Download incoming media if present
-                if (mediaType !== 'text') {
-                    try {
-                        const buffer = await (0, baileys_1.downloadMediaMessage)(msg, 'buffer', {}, {
-                            logger,
-                            reuploadRequest: sock.updateMediaMessage,
-                        });
-                        if (buffer) {
-                            let ext = 'bin';
-                            if (mediaType === 'image')
-                                ext = 'jpg';
-                            else if (mediaType === 'video')
-                                ext = 'mp4';
-                            else if (mediaType === 'audio')
-                                ext = 'ogg';
-                            else if (mediaType === 'sticker')
-                                ext = 'webp';
-                            else if (mediaType === 'document') {
-                                const fn = msg.message.documentMessage?.fileName;
-                                ext = fn ? path_1.default.extname(fn).replace('.', '') || 'pdf' : 'pdf';
+            try {
+                if (type !== 'notify')
+                    return;
+                for (const msg of messages) {
+                    if (!msg.message)
+                        continue;
+                    const remoteJid = msg.key.remoteJid || '';
+                    const fromMe = msg.key.fromMe ? 1 : 0;
+                    const messageId = msg.key.id || '';
+                    const timestamp = typeof msg.messageTimestamp === 'number' ? msg.messageTimestamp : Number(msg.messageTimestamp || Date.now() / 1000);
+                    const pushName = msg.pushName || '';
+                    let body = '';
+                    let mediaType = 'text';
+                    let mediaCaption = '';
+                    let mediaUrl = null;
+                    if (msg.message.conversation) {
+                        body = msg.message.conversation;
+                    }
+                    else if (msg.message.extendedTextMessage?.text) {
+                        body = msg.message.extendedTextMessage.text;
+                    }
+                    else if (msg.message.imageMessage) {
+                        mediaType = 'image';
+                        mediaCaption = msg.message.imageMessage.caption || '';
+                        body = mediaCaption || '[Image]';
+                    }
+                    else if (msg.message.videoMessage) {
+                        mediaType = 'video';
+                        mediaCaption = msg.message.videoMessage.caption || '';
+                        body = mediaCaption || '[Video]';
+                    }
+                    else if (msg.message.audioMessage) {
+                        mediaType = 'audio';
+                        body = '[Audio Voice Message]';
+                    }
+                    else if (msg.message.documentMessage) {
+                        mediaType = 'document';
+                        mediaCaption = msg.message.documentMessage.fileName || 'document.pdf';
+                        body = mediaCaption;
+                    }
+                    else if (msg.message.stickerMessage) {
+                        mediaType = 'sticker';
+                        body = '[Sticker]';
+                    }
+                    const msgRecordId = (0, uuid_1.v4)();
+                    // Download incoming media if present
+                    if (mediaType !== 'text') {
+                        try {
+                            const buffer = await (0, baileys_1.downloadMediaMessage)(msg, 'buffer', {}, {
+                                logger,
+                                reuploadRequest: sock.updateMediaMessage,
+                            });
+                            if (buffer) {
+                                let ext = 'bin';
+                                if (mediaType === 'image')
+                                    ext = 'jpg';
+                                else if (mediaType === 'video')
+                                    ext = 'mp4';
+                                else if (mediaType === 'audio')
+                                    ext = 'ogg';
+                                else if (mediaType === 'sticker')
+                                    ext = 'webp';
+                                else if (mediaType === 'document') {
+                                    const fn = msg.message.documentMessage?.fileName;
+                                    ext = fn ? path_1.default.extname(fn).replace('.', '') || 'pdf' : 'pdf';
+                                }
+                                const fileName = `${msgRecordId}.${ext}`;
+                                const filePath = path_1.default.join(config_1.config.mediaDir, fileName);
+                                fs_1.default.writeFileSync(filePath, buffer);
+                                mediaUrl = `/media/${fileName}`;
                             }
-                            const fileName = `${msgRecordId}.${ext}`;
-                            const filePath = path_1.default.join(config_1.config.mediaDir, fileName);
-                            fs_1.default.writeFileSync(filePath, buffer);
-                            mediaUrl = `/media/${fileName}`;
+                        }
+                        catch (downloadErr) {
+                            console.error('Failed to download incoming media message:', downloadErr);
                         }
                     }
-                    catch (downloadErr) {
-                        console.error('Failed to download incoming media message:', downloadErr);
+                    db_1.db.prepare(`
+            INSERT INTO messages (id, user_id, session_id, remote_jid, from_me, push_name, message_id, body, media_type, media_url, media_caption, status, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DELIVERED', ?)
+          `).run(msgRecordId, userId, sessionId, remoteJid, fromMe, pushName, messageId, body, mediaType, mediaUrl, mediaCaption, timestamp);
+                    // Update contacts cache
+                    if (remoteJid) {
+                        const contactId = `${sessionId}_${remoteJid}`;
+                        const phone = remoteJid.includes('@s.whatsapp.net') ? remoteJid.split('@')[0] : '';
+                        try {
+                            db_1.db.prepare(`
+                INSERT INTO contacts (id, user_id, session_id, jid, name, phone_number, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(session_id, jid) DO UPDATE SET 
+                  name = COALESCE(NULLIF(excluded.name, ''), contacts.name),
+                  phone_number = COALESCE(NULLIF(excluded.phone_number, ''), contacts.phone_number),
+                  updated_at = CURRENT_TIMESTAMP
+              `).run(contactId, userId, sessionId, remoteJid, pushName, phone);
+                        }
+                        catch { }
                     }
+                    const payload = {
+                        id: msgRecordId,
+                        messageId,
+                        sessionId,
+                        remoteJid,
+                        fromMe: Boolean(fromMe),
+                        pushName,
+                        body,
+                        mediaType,
+                        media_type: mediaType,
+                        mediaUrl,
+                        media_url: mediaUrl,
+                        mediaCaption,
+                        media_caption: mediaCaption,
+                        timestamp,
+                    };
+                    this.emitToUser(userId, 'new_message', payload);
+                    webhook_service_1.WebhookService.sendWebhook(userId, sessionId, 'message.received', payload);
                 }
-                db_1.db.prepare(`
-          INSERT INTO messages (id, user_id, session_id, remote_jid, from_me, push_name, message_id, body, media_type, media_url, media_caption, status, timestamp)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DELIVERED', ?)
-        `).run(msgRecordId, userId, sessionId, remoteJid, fromMe, pushName, messageId, body, mediaType, mediaUrl, mediaCaption, timestamp);
-                // Update contacts cache
-                if (remoteJid) {
-                    const contactId = `${sessionId}_${remoteJid}`;
-                    const phone = remoteJid.includes('@s.whatsapp.net') ? remoteJid.split('@')[0] : '';
-                    try {
-                        db_1.db.prepare(`
-              INSERT INTO contacts (id, user_id, session_id, jid, name, phone_number, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-              ON CONFLICT(session_id, jid) DO UPDATE SET 
-                name = COALESCE(NULLIF(excluded.name, ''), contacts.name),
-                phone_number = COALESCE(NULLIF(excluded.phone_number, ''), contacts.phone_number),
-                updated_at = CURRENT_TIMESTAMP
-            `).run(contactId, userId, sessionId, remoteJid, pushName, phone);
-                    }
-                    catch { }
-                }
-                const payload = {
-                    id: msgRecordId,
-                    messageId,
-                    sessionId,
-                    remoteJid,
-                    fromMe: Boolean(fromMe),
-                    pushName,
-                    body,
-                    mediaType,
-                    media_type: mediaType,
-                    mediaUrl,
-                    media_url: mediaUrl,
-                    mediaCaption,
-                    media_caption: mediaCaption,
-                    timestamp,
-                };
-                this.emitToUser(userId, 'new_message', payload);
-                webhook_service_1.WebhookService.sendWebhook(userId, sessionId, 'message.received', payload);
+            }
+            catch (err) {
+                console.error(`[Session ${sessionId}] messages.upsert handler failed:`, err);
             }
         });
         return { message: 'Session started', status: 'STARTING' };

@@ -14,6 +14,15 @@ const db_1 = require("./database/db");
 const whatsapp_service_1 = require("./services/whatsapp.service");
 const auth_service_1 = require("./services/auth.service");
 const api_routes_1 = __importDefault(require("./routes/api.routes"));
+// Keep the process alive on unexpected errors. Node kills the whole process on an
+// unhandled rejection by default, which took every user's WhatsApp session offline
+// and made the host return 502 Bad Gateway until it finished restarting.
+process.on('unhandledRejection', (reason) => {
+    console.error('⚠️  Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('⚠️  Uncaught exception:', err);
+});
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
 const io = new socket_io_1.Server(server, {
@@ -60,11 +69,25 @@ io.on('connection', (socket) => {
         // disconnected
     });
 });
+// Unknown API routes must return a JSON 404. Previously they fell through to the SPA
+// handler below, which sent no response at all, so the request hung until the host
+// timed out with 502 Bad Gateway.
+app.use('/api', (req, res) => {
+    res.status(404).json({ success: false, error: `Not found: ${req.method} ${req.originalUrl}` });
+});
 // Fallback SPA routing for Dashboard
 app.get('*', (req, res) => {
     if (!req.path.startsWith('/api')) {
         res.sendFile(path_1.default.join(publicDir, 'index.html'));
     }
+});
+// Central error handler: always answer with JSON so clients never receive an empty
+// body (which the dashboard reported as "Unexpected end of JSON input").
+app.use((err, req, res, next) => {
+    console.error('Unhandled request error:', err);
+    if (res.headersSent)
+        return next(err);
+    res.status(500).json({ success: false, error: 'Internal server error' });
 });
 // Initialize Database and Start Server
 async function startServer() {

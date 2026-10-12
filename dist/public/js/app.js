@@ -11,6 +11,21 @@ let qrPollTimer = null;
 let activeChatRemoteJid = null;
 let currentActiveSessionForChat = null;
 
+// Safely parse a fetch Response as JSON. Hosts return empty or HTML bodies on
+// errors (e.g. a 502 Bad Gateway), which made res.json() throw
+// "Unexpected end of JSON input". This always returns a usable object.
+async function parseJson(res) {
+  const text = await res.text();
+  if (text) {
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      /* fall through */
+    }
+  }
+  return { success: false, error: `Request failed (HTTP ${res.status})`, _httpStatus: res.status };
+}
+
 // Copy to clipboard helper
 function copyToClipboard(text) {
   navigator.clipboard.writeText(text).then(() => {
@@ -70,7 +85,7 @@ async function handleLogin(e) {
       body: JSON.stringify({ email, password }),
     });
 
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) throw new Error(data.error);
 
     authToken = data.token;
@@ -97,7 +112,7 @@ async function handleRegister(e) {
       body: JSON.stringify({ name, email, password, plan }),
     });
 
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) throw new Error(data.error);
 
     authToken = data.token;
@@ -128,7 +143,7 @@ async function loadUserAndInit() {
     const res = await fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) throw new Error();
     currentUser = data.user;
     initApp();
@@ -239,7 +254,7 @@ async function loadOverviewStats() {
     const res = await fetch(`${API_BASE}/stats/overview`, {
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) return;
 
     const s = data.stats;
@@ -292,7 +307,7 @@ async function loadSessions() {
     const res = await fetch(`${API_BASE}/sessions`, {
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) return;
 
     const grid = document.getElementById('sessionsGrid');
@@ -397,7 +412,7 @@ async function handleCreateSession(e) {
       body: JSON.stringify({ sessionName, webhookUrl }),
     });
 
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) throw new Error(data.error);
 
     closeNewSessionModal();
@@ -416,11 +431,19 @@ async function startSessionAndShowQr(sessionId) {
   setQrModalHint('Starting session and generating QR...');
 
   try {
-    await fetch(`${API_BASE}/sessions/${sessionId}/start`, {
+    const res = await fetch(`${API_BASE}/sessions/${sessionId}/start`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${authToken}` },
     });
+    const data = await parseJson(res);
+    if (!data.success) {
+      const msg = data.error || 'Unknown error';
+      setQrModalHint(`Could not start session: ${msg}`);
+      showToast(`Start failed: ${msg}`);
+      return;
+    }
   } catch (err) {
+    setQrModalHint('Could not reach the gateway. Please retry.');
     console.error('Start session err:', err);
   }
 
@@ -441,7 +464,7 @@ async function refreshQr(sessionId) {
     const res = await fetch(`${API_BASE}/sessions/${sessionId}/qr`, {
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) return;
 
     if (data.status === 'CONNECTED') {
@@ -525,7 +548,7 @@ async function handleRequestPairingCode() {
       body: JSON.stringify({ phoneNumber: phone }),
     });
 
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) throw new Error(data.error);
 
     const display = document.getElementById('pairingCodeDisplay');
@@ -655,7 +678,7 @@ async function populateChatSessionSelector() {
   const res = await fetch(`${API_BASE}/sessions`, {
     headers: { Authorization: `Bearer ${authToken}` },
   });
-  const data = await res.json();
+  const data = await parseJson(res);
   if (!data.success) return;
 
   const select = document.getElementById('chatSessionSelector');
@@ -677,7 +700,7 @@ async function loadChats() {
     const res = await fetch(`${API_BASE}/chats?sessionId=${sessionId}`, {
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) return;
 
     loadedChatsData = data.chats || [];
@@ -783,7 +806,7 @@ async function fetchAvatarInBackground(sessionId, jid) {
     const res = await fetch(`${API_BASE}/chats/avatar?sessionId=${sessionId}&jid=${encodeURIComponent(jid)}`, {
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const data = await res.json();
+    const data = await parseJson(res);
     if (data.success && data.avatarUrl) {
       avatarCache.set(jid, data.avatarUrl);
       
@@ -913,7 +936,7 @@ async function handleSaveContact(e) {
       body: formData,
     });
 
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) throw new Error(data.error);
 
     if (data.avatarUrl) {
@@ -959,7 +982,7 @@ async function loadMessagesForActiveChat() {
     const res = await fetch(`${API_BASE}/messages?sessionId=${sessionId}&jid=${encodeURIComponent(activeChatRemoteJid)}`, {
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) return;
 
     if (data.messages.length === 0) {
@@ -1192,7 +1215,7 @@ async function handleSendDirectMessage(e) {
         body: formData,
       });
 
-      const data = await res.json();
+      const data = await parseJson(res);
       if (!data.success) throw new Error(data.error || 'Failed to send media');
 
       textInput.value = '';
@@ -1216,7 +1239,7 @@ async function handleSendDirectMessage(e) {
         }),
       });
 
-      const data = await res.json();
+      const data = await parseJson(res);
       if (!data.success) throw new Error(data.error || 'Failed to send text message');
 
       textInput.value = '';
@@ -1253,7 +1276,7 @@ async function populateBroadcastSessionSelector() {
   const res = await fetch(`${API_BASE}/sessions`, {
     headers: { Authorization: `Bearer ${authToken}` },
   });
-  const data = await res.json();
+  const data = await parseJson(res);
   if (!data.success) return;
 
   const select = document.getElementById('broadcastSessionId');
@@ -1311,7 +1334,7 @@ async function loadApiKeys() {
     const res = await fetch(`${API_BASE}/auth/api-keys`, {
       headers: { Authorization: `Bearer ${authToken}` },
     });
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) return;
 
     const table = document.getElementById('apiKeysTable');
@@ -1353,7 +1376,7 @@ async function handleCreateApiKey() {
       body: JSON.stringify({ name }),
     });
 
-    const data = await res.json();
+    const data = await parseJson(res);
     if (!data.success) throw new Error(data.error);
 
     prompt('✅ Copy your full API Key now (it will not be shown again):', data.key.apiKey);

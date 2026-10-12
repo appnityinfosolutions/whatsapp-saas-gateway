@@ -24,7 +24,11 @@ function persistDb() {
   try {
     const data = sqlDb.export();
     const buffer = Buffer.from(data);
-    fs.writeFileSync(config.dbPath, buffer);
+    // Write to a temp file and rename so a crash mid-write can never leave a
+    // half-written / corrupt database behind.
+    const tmpPath = `${config.dbPath}.tmp`;
+    fs.writeFileSync(tmpPath, buffer);
+    fs.renameSync(tmpPath, config.dbPath);
   } catch (err) {
     console.error('Failed to persist SQLite DB:', err);
   }
@@ -80,24 +84,19 @@ export async function initDatabase() {
   // Ensure /tmp/data exists first
   ensureTmpDataDir();
 
-  // Locate WASM file - Vercel bundles to /var/task/dist/, Render copies to dist/
-  const isVercel = !!process.env.VERCEL;
-  const isRender = !!process.env.RENDER;
-  const wasmLocations = isVercel
-    ? [
-        path.join(__dirname, 'sql-wasm.wasm'),
-        path.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
-        path.join(process.cwd(), 'sql-wasm.wasm'),
-      ]
-    : isRender
-    ? [
-        path.join(__dirname, 'sql-wasm.wasm'),
-        path.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
-        path.join(process.cwd(), 'sql-wasm.wasm'),
-      ]
-    : [
-        path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-      ];
+  // Locate sql-wasm.wasm across every runtime layout:
+  //  - Render / Vercel: the build copies it next to the compiled entry (dist/)
+  //  - Local dev via ts-node: it lives in node_modules, two/three levels up from __dirname
+  const wasmLocations = [
+    path.join(__dirname, 'sql-wasm.wasm'),
+    path.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
+    path.join(process.cwd(), 'sql-wasm.wasm'),
+    // From dist/database/*.js -> project root -> node_modules
+    path.join(__dirname, '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+    // From src/database/*.ts -> project root -> node_modules
+    path.join(__dirname, '..', '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+    path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+  ];
 
   let wasmPath = '';
   for (const loc of wasmLocations) {
@@ -120,10 +119,18 @@ export async function initDatabase() {
 
   SQL = SQLModule;
 
-  // Load existing database file if present
+  // Load existing database file if present. If it is unreadable (e.g. corrupted by a
+  // crash mid-write) fall back to a fresh database instead of failing to boot, which
+  // would leave the whole gateway down with 502 errors.
   if (fs.existsSync(config.dbPath)) {
-    const fileBuffer = fs.readFileSync(config.dbPath);
-    sqlDb = new SQL.Database(fileBuffer);
+    try {
+      const fileBuffer = fs.readFileSync(config.dbPath);
+      sqlDb = new SQL.Database(fileBuffer);
+      sqlDb.exec('SELECT 1'); // sanity check the image
+    } catch (err) {
+      console.error('⚠️  Existing database is unreadable, starting fresh:', err);
+      sqlDb = new SQL.Database();
+    }
   } else {
     sqlDb = new SQL.Database();
   }
