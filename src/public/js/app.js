@@ -319,6 +319,15 @@ async function loadSessions() {
                 <i data-lucide="calendar" class="w-3.5 h-3.5 text-slate-500"></i>
                 <span class="text-[10px] text-slate-500 font-mono">${new Date(s.created_at).toLocaleDateString()}</span>
               </div>
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 min-w-0 flex-1">
+                  <i data-lucide="fingerprint" class="w-3.5 h-3.5 text-slate-500 shrink-0"></i>
+                  <span class="text-[10px] text-slate-400 font-mono truncate select-all" title="Session ID: ${s.id}"><span class="text-slate-500">ID:</span> ${s.id}</span>
+                </div>
+                <button type="button" onclick="copySessionId('${s.id}', this)" class="text-slate-500 hover:text-emerald-400 transition shrink-0 p-0.5 rounded hover:bg-slate-800" title="Copy Session ID">
+                  <i data-lucide="copy" class="w-3 h-3"></i>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1284,5 +1293,25 @@ async function handleSaveWebhook(e) {
     alert('✅ Global Webhook URL saved successfully!');
   } catch (err) {
     alert(err.message);
+  }
+}
+
+function copySessionId(sessionId, btn) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(sessionId).then(() => {
+      if (btn) {
+        const original = btn.innerHTML;
+        btn.innerHTML = '<i data-lucide="check" class="w-3 h-3 text-emerald-400"></i>';
+        if (window.lucide) lucide.createIcons();
+        setTimeout(() => {
+          btn.innerHTML = original;
+          if (window.lucide) lucide.createIcons();
+        }, 1500);
+      }
+    }).catch(() => {
+      prompt('Copy Session ID:', sessionId);
+    });
+  } else {
+    prompt('Copy Session ID:', sessionId);
   }
 }
