@@ -87,4 +87,15 @@ export class SessionController {
       return res.status(400).json({ success: false, error: error.message });
     }
   }
+
+  // Force a brand-new QR code (relink) for a session
+  static async restart(req: AuthRequest, res: Response) {
+    try {
+      const { sessionId } = req.params;
+      const result = await WhatsAppService.restartSession(req.user.id, sessionId);
+      return res.json({ success: true, ...result });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+  }
 }

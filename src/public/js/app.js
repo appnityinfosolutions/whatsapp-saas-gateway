@@ -7,6 +7,7 @@ let authToken = localStorage.getItem('wa_auth_token') || '';
 let currentUser = null;
 let socket = null;
 let activeSessionIdForModal = null;
+let qrPollTimer = null;
 let activeChatRemoteJid = null;
 let currentActiveSessionForChat = null;
 
@@ -174,6 +175,7 @@ function initSocket() {
     if (activeSessionIdForModal === sessionId) {
       document.getElementById('qrImage').src = qr;
       document.getElementById('qrModal').classList.remove('hidden');
+      setQrModalHint('Open WhatsApp > Linked Devices > Link a Device. QR refreshes every 5s.');
     }
     loadSessions();
   });
@@ -411,6 +413,7 @@ async function startSessionAndShowQr(sessionId) {
   document.getElementById('qrModal').classList.remove('hidden');
   document.getElementById('qrImage').src = 'https://placehold.co/300x300/0f172a/34d399?text=Generating+QR...';
   document.getElementById('pairingCodeDisplay').classList.add('hidden');
+  setQrModalHint('Starting session and generating QR...');
 
   try {
     await fetch(`${API_BASE}/sessions/${sessionId}/start`, {
@@ -420,9 +423,87 @@ async function startSessionAndShowQr(sessionId) {
   } catch (err) {
     console.error('Start session err:', err);
   }
+
+  // Fetch immediately, then keep refreshing every 5 seconds. WhatsApp rotates and
+  // expires the QR code, so an auto-refresh guarantees the user always scans a live
+  // code instead of a stale one (which silently fails to link the device).
+  refreshQr(sessionId);
+  startQrPolling(sessionId);
+}
+
+function setQrModalHint(text) {
+  const el = document.getElementById('qrModalHint');
+  if (el) el.innerText = text;
+}
+
+async function refreshQr(sessionId) {
+  try {
+    const res = await fetch(`${API_BASE}/sessions/${sessionId}/qr`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const data = await res.json();
+    if (!data.success) return;
+
+    if (data.status === 'CONNECTED') {
+      setQrModalHint('Connected! Closing...');
+      closeQrModal();
+      loadSessions();
+      return;
+    }
+    if (data.status === 'LOGGED_OUT') {
+      setQrModalHint('Device unlinked. Click "New QR" to link again.');
+      return;
+    }
+    if (data.qr) {
+      const img = document.getElementById('qrImage');
+      if (img.getAttribute('src') !== data.qr) img.src = data.qr;
+      setQrModalHint('Open WhatsApp > Linked Devices > Link a Device. QR refreshes every 5s.');
+    } else {
+      setQrModalHint('Generating QR code...');
+    }
+  } catch (err) {
+    console.error('Refresh QR err:', err);
+  }
+}
+
+function startQrPolling(sessionId) {
+  stopQrPolling();
+  qrPollTimer = setInterval(() => {
+    if (activeSessionIdForModal !== sessionId) {
+      stopQrPolling();
+      return;
+    }
+    refreshQr(sessionId);
+  }, 5000);
+}
+
+function stopQrPolling() {
+  if (qrPollTimer) {
+    clearInterval(qrPollTimer);
+    qrPollTimer = null;
+  }
+}
+
+// Force a brand-new QR code (relink) for the session currently in the modal
+async function handleRegenerateQr() {
+  if (!activeSessionIdForModal) return;
+  const sessionId = activeSessionIdForModal;
+  document.getElementById('qrImage').src = 'https://placehold.co/300x300/0f172a/34d399?text=Generating+QR...';
+  setQrModalHint('Generating a fresh QR code...');
+  try {
+    await fetch(`${API_BASE}/sessions/${sessionId}/restart`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+  } catch (err) {
+    console.error('Restart session err:', err);
+  }
+  refreshQr(sessionId);
+  startQrPolling(sessionId);
 }
 
 function closeQrModal() {
+  stopQrPolling();
   document.getElementById('qrModal').classList.add('hidden');
   activeSessionIdForModal = null;
 }

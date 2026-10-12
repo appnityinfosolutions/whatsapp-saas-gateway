@@ -832,6 +832,7 @@ console.log(data);</code></pre>
       <div class="p-4 bg-white rounded-2xl inline-block shadow-xl">
         <img id="qrImage" src="" alt="WhatsApp QR Code" class="w-64 h-64 object-contain">
       </div>
+      <p id="qrModalHint" class="text-[11px] text-emerald-400/90">Generating QR code...</p>
 
       <!-- Pairing Code Alternative Option -->
       <div class="pt-2 border-t border-slate-800">
@@ -843,6 +844,10 @@ console.log(data);</code></pre>
         <div id="pairingCodeDisplay" class="mt-2 text-sm font-mono font-bold text-emerald-400 tracking-widest hidden"></div>
       </div>
 
+      <button onclick="handleRegenerateQr()" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition">
+        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+        <span>New QR / Relink</span>
+      </button>
       <p class="text-[11px] text-slate-500">Open WhatsApp > Linked Devices > Link a Device</p>
     </div>
   </div>

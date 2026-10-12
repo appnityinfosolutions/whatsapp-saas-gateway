@@ -74,7 +74,7 @@ class WhatsAppService {
     `).run(sessionId, userId, sessionName, webhookUrl || null);
         return this.getSessionById(sessionId);
     }
-    static async startSession(userId, sessionId) {
+    static async startSession(userId, sessionId, opts = {}) {
         const session = db_1.db.prepare('SELECT * FROM sessions WHERE id = ? AND user_id = ?').get(sessionId, userId);
         if (!session) {
             throw new Error('Session not found');
@@ -83,8 +83,18 @@ class WhatsAppService {
             return { message: 'Session is already running', status: session.status };
         }
         const sessionDir = this.getSessionPath(sessionId);
-        // Always force fresh QR generation by clearing stale auth state if not connected
-        if (session.status !== 'CONNECTED') {
+        const hasCreds = fs_1.default.existsSync(path_1.default.join(sessionDir, 'creds.json'));
+        // Only wipe stored credentials when we deliberately want a brand-new pairing,
+        // when the session was logged out, or when there are no usable credentials yet.
+        //
+        // IMPORTANT: never wipe on a plain reconnect. WhatsApp closes the socket with
+        // code 515 (restartRequired) immediately after the QR is scanned and expects the
+        // client to restart reusing the credentials it just saved. Deleting the auth
+        // folder here destroyed those credentials, so the device never finished linking
+        // and a fresh QR was shown again - which is exactly the "QR generated but device
+        // never links" bug.
+        const needsFreshPairing = opts.forceFresh || session.status === 'LOGGED_OUT' || !hasCreds;
+        if (needsFreshPairing) {
             try {
                 fs_1.default.rmSync(sessionDir, { recursive: true, force: true });
             }
@@ -131,12 +141,17 @@ class WhatsAppService {
             }
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== baileys_1.DisconnectReason.loggedOut;
+                const isLoggedOut = statusCode === baileys_1.DisconnectReason.loggedOut;
+                // 515 (restartRequired) is sent by WhatsApp right after a QR code is scanned so
+                // the client can restart the socket and finish linking. Reconnect immediately
+                // and DO NOT clear credentials, otherwise the pairing is lost forever.
+                const isRestartRequired = statusCode === baileys_1.DisconnectReason.restartRequired;
+                const shouldReconnect = !isLoggedOut;
                 this.sockets.delete(sessionId);
-                if (statusCode === baileys_1.DisconnectReason.loggedOut) {
+                if (isLoggedOut) {
                     db_1.db.prepare("UPDATE sessions SET status = 'LOGGED_OUT', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
                     this.emitToUser(userId, 'session_status', { sessionId, status: 'LOGGED_OUT' });
-                    // Clear session auth state folder
+                    // Credentials are no longer valid: clear them so a fresh QR can be generated.
                     try {
                         fs_1.default.rmSync(sessionDir, { recursive: true, force: true });
                     }
@@ -146,10 +161,11 @@ class WhatsAppService {
                     db_1.db.prepare("UPDATE sessions SET status = 'DISCONNECTED', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
                     this.emitToUser(userId, 'session_status', { sessionId, status: 'DISCONNECTED' });
                     if (shouldReconnect && session.is_auto_reconnect) {
-                        // Exponential backoff: 5s, 10s, 20s, 40s, max 60s
-                        const attempt = (session.reconnectAttempt || 0) + 1;
-                        const delayMs = Math.min(5000 * Math.pow(2, attempt - 1), 60000);
-                        console.log(`[Session ${sessionId}] Connection closed (code: ${statusCode}), reconnecting in ${delayMs / 1000}s (attempt ${attempt})...`);
+                        // restartRequired reconnects almost instantly; other drops back off
+                        // exponentially (5s, 10s, 20s, 40s, max 60s).
+                        const attempt = isRestartRequired ? 0 : (session.reconnect_attempt || 0) + 1;
+                        const delayMs = isRestartRequired ? 300 : Math.min(5000 * Math.pow(2, attempt - 1), 60000);
+                        console.log(`[Session ${sessionId}] Connection closed (code: ${statusCode}), reconnecting in ${delayMs}ms (attempt ${attempt})...`);
                         // Update attempt counter
                         db_1.db.prepare("UPDATE sessions SET reconnect_attempt = ? WHERE id = ?").run(attempt, sessionId);
                         setTimeout(() => {
@@ -157,7 +173,7 @@ class WhatsAppService {
                         }, delayMs);
                     }
                 }
-                webhook_service_1.WebhookService.sendWebhook(userId, sessionId, 'session.status', { status: 'DISCONNECTED', statusCode });
+                webhook_service_1.WebhookService.sendWebhook(userId, sessionId, 'session.status', { status: isLoggedOut ? 'LOGGED_OUT' : 'DISCONNECTED', statusCode });
             }
             else if (connection === 'open') {
                 const phone = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : '';
@@ -391,9 +407,33 @@ class WhatsAppService {
             await sock.logout().catch(() => sock.end(undefined));
             this.sockets.delete(sessionId);
         }
+        // logout() unlinks the device, so the stored credentials are no longer valid.
+        // Clear them so the next start generates a fresh QR code instead of silently
+        // failing with a 401 loop.
+        const sessionDir = path_1.default.join(config_1.config.sessionsDir, sessionId);
+        try {
+            fs_1.default.rmSync(sessionDir, { recursive: true, force: true });
+        }
+        catch { }
         db_1.db.prepare("UPDATE sessions SET status = 'STOPPED', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?").run(sessionId, userId);
         this.emitToUser(userId, 'session_status', { sessionId, status: 'STOPPED' });
         return { message: 'Session stopped' };
+    }
+    // Force a brand-new QR pairing for a session (used by the "New QR" / relink action).
+    static async restartSession(userId, sessionId) {
+        const existing = db_1.db.prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?').get(sessionId, userId);
+        if (!existing) {
+            throw new Error('Session not found');
+        }
+        const sock = this.sockets.get(sessionId);
+        if (sock) {
+            try {
+                sock.end(undefined);
+            }
+            catch { }
+            this.sockets.delete(sessionId);
+        }
+        return this.startSession(userId, sessionId, { forceFresh: true });
     }
     static async deleteSession(userId, sessionId) {
         await this.stopSession(userId, sessionId).catch(() => { });

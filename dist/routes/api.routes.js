@@ -36,6 +36,7 @@ router.post('/sessions/:sessionId/stop', apiKeyAuth_1.apiKeyOrJwtAuth, session_c
 router.delete('/sessions/:sessionId', apiKeyAuth_1.apiKeyOrJwtAuth, session_controller_1.SessionController.delete);
 router.get('/sessions/:sessionId/qr', apiKeyAuth_1.apiKeyOrJwtAuth, session_controller_1.SessionController.getQr);
 router.post('/sessions/:sessionId/pairing-code', apiKeyAuth_1.apiKeyOrJwtAuth, session_controller_1.SessionController.requestPairingCode);
+router.post('/sessions/:sessionId/restart', apiKeyAuth_1.apiKeyOrJwtAuth, session_controller_1.SessionController.restart);
 // ==========================================
 // 3. WhatsApp Messaging Endpoints (API & UI)
 // ==========================================

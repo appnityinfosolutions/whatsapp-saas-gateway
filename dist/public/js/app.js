@@ -7,8 +7,26 @@ let authToken = localStorage.getItem('wa_auth_token') || '';
 let currentUser = null;
 let socket = null;
 let activeSessionIdForModal = null;
+let qrPollTimer = null;
 let activeChatRemoteJid = null;
 let currentActiveSessionForChat = null;
+
+// Copy to clipboard helper
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    showToast('Copied!');
+  }).catch(() => {
+    showToast('Failed to copy');
+  });
+}
+
+function showToast(msg) {
+  const toast = document.createElement('div');
+  toast.className = 'fixed bottom-4 right-4 bg-emerald-500 text-slate-950 px-4 py-2 rounded-xl text-xs font-semibold shadow-lg z-50 animate-slide-up';
+  toast.innerText = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2000);
+}
 
 // Initialize app on load
 document.addEventListener('DOMContentLoaded', () => {
@@ -157,6 +175,7 @@ function initSocket() {
     if (activeSessionIdForModal === sessionId) {
       document.getElementById('qrImage').src = qr;
       document.getElementById('qrModal').classList.remove('hidden');
+      setQrModalHint('Open WhatsApp > Linked Devices > Link a Device. QR refreshes every 5s.');
     }
     loadSessions();
   });
@@ -298,27 +317,36 @@ async function loadSessions() {
         <div class="bg-slate-900/60 border ${isConnected ? 'border-emerald-500/30' : 'border-slate-800'} rounded-2xl p-6 flex flex-col justify-between space-y-4">
           <div>
             <div class="flex items-center justify-between mb-3">
-              <span class="text-xs font-bold text-white tracking-wide">${s.session_name}</span>
-              <span class="px-2 py-0.5 text-[10px] font-mono rounded-full ${
-                isConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 
-                isScanQr ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse' : 
-                'bg-slate-800 text-slate-400'
-              }">${s.status}</span>
-            </div>
+                          <span class="text-xs font-bold text-white tracking-wide">${s.session_name}</span>
+                          <span class="px-2 py-0.5 text-[10px] font-mono rounded-full ${
+                            isConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                            isScanQr ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse' :
+                            'bg-slate-800 text-slate-400'
+                          }">${s.status}</span>
+                        </div>
 
-            <div class="space-y-1.5 text-xs text-slate-400">
+                        <div class="space-y-1.5 text-xs text-slate-400">
+                          <div class="flex items-center gap-2">
+                                                      <i data-lucide="hash" class="w-3.5 h-3.5 text-slate-500"></i>
+                                                      <div class="flex items-center gap-1.5 flex-1 min-w-0">
+                                                        <span class="font-mono text-white text-[10px] truncate max-w-[150px]">${s.id}</span>
+                                                        <button onclick="copyToClipboard('${s.id}')" class="p-1 text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 rounded transition" title="Copy Session ID">
+                                                          <i data-lucide="copy" class="w-3 h-3"></i>
+                                                        </button>
+                                                      </div>
+                                                    </div>
+                          <div class="flex items-center gap-2">
+                            <i data-lucide="phone" class="w-3.5 h-3.5 text-slate-500"></i>
+                            <span class="font-mono text-white">${s.phone_number ? '+' + s.phone_number : 'Not Connected'}</span>
+                          </div>
               <div class="flex items-center gap-2">
-                <i data-lucide="phone" class="w-3.5 h-3.5 text-slate-500"></i>
-                <span class="font-mono text-white">${s.phone_number ? '+' + s.phone_number : 'Not Connected'}</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <i data-lucide="user" class="w-3.5 h-3.5 text-slate-500"></i>
-                <span>${s.push_name || '—'}</span>
-              </div>
-              <div class="flex items-center gap-2">
-                <i data-lucide="calendar" class="w-3.5 h-3.5 text-slate-500"></i>
-                <span class="text-[10px] text-slate-500 font-mono">${new Date(s.created_at).toLocaleDateString()}</span>
-              </div>
+                              <i data-lucide="user" class="w-3.5 h-3.5 text-slate-500"></i>
+                              <span>${s.push_name || '—'}</span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                              <i data-lucide="calendar" class="w-3.5 h-3.5 text-slate-500"></i>
+                              <span class="text-[10px] text-slate-500 font-mono">${new Date(s.created_at).toLocaleDateString()}</span>
+                            </div>
             </div>
           </div>
 
@@ -385,6 +413,7 @@ async function startSessionAndShowQr(sessionId) {
   document.getElementById('qrModal').classList.remove('hidden');
   document.getElementById('qrImage').src = 'https://placehold.co/300x300/0f172a/34d399?text=Generating+QR...';
   document.getElementById('pairingCodeDisplay').classList.add('hidden');
+  setQrModalHint('Starting session and generating QR...');
 
   try {
     await fetch(`${API_BASE}/sessions/${sessionId}/start`, {
@@ -394,9 +423,87 @@ async function startSessionAndShowQr(sessionId) {
   } catch (err) {
     console.error('Start session err:', err);
   }
+
+  // Fetch immediately, then keep refreshing every 5 seconds. WhatsApp rotates and
+  // expires the QR code, so an auto-refresh guarantees the user always scans a live
+  // code instead of a stale one (which silently fails to link the device).
+  refreshQr(sessionId);
+  startQrPolling(sessionId);
+}
+
+function setQrModalHint(text) {
+  const el = document.getElementById('qrModalHint');
+  if (el) el.innerText = text;
+}
+
+async function refreshQr(sessionId) {
+  try {
+    const res = await fetch(`${API_BASE}/sessions/${sessionId}/qr`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const data = await res.json();
+    if (!data.success) return;
+
+    if (data.status === 'CONNECTED') {
+      setQrModalHint('Connected! Closing...');
+      closeQrModal();
+      loadSessions();
+      return;
+    }
+    if (data.status === 'LOGGED_OUT') {
+      setQrModalHint('Device unlinked. Click "New QR" to link again.');
+      return;
+    }
+    if (data.qr) {
+      const img = document.getElementById('qrImage');
+      if (img.getAttribute('src') !== data.qr) img.src = data.qr;
+      setQrModalHint('Open WhatsApp > Linked Devices > Link a Device. QR refreshes every 5s.');
+    } else {
+      setQrModalHint('Generating QR code...');
+    }
+  } catch (err) {
+    console.error('Refresh QR err:', err);
+  }
+}
+
+function startQrPolling(sessionId) {
+  stopQrPolling();
+  qrPollTimer = setInterval(() => {
+    if (activeSessionIdForModal !== sessionId) {
+      stopQrPolling();
+      return;
+    }
+    refreshQr(sessionId);
+  }, 5000);
+}
+
+function stopQrPolling() {
+  if (qrPollTimer) {
+    clearInterval(qrPollTimer);
+    qrPollTimer = null;
+  }
+}
+
+// Force a brand-new QR code (relink) for the session currently in the modal
+async function handleRegenerateQr() {
+  if (!activeSessionIdForModal) return;
+  const sessionId = activeSessionIdForModal;
+  document.getElementById('qrImage').src = 'https://placehold.co/300x300/0f172a/34d399?text=Generating+QR...';
+  setQrModalHint('Generating a fresh QR code...');
+  try {
+    await fetch(`${API_BASE}/sessions/${sessionId}/restart`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+  } catch (err) {
+    console.error('Restart session err:', err);
+  }
+  refreshQr(sessionId);
+  startQrPolling(sessionId);
 }
 
 function closeQrModal() {
+  stopQrPolling();
   document.getElementById('qrModal').classList.add('hidden');
   activeSessionIdForModal = null;
 }
@@ -1284,5 +1391,25 @@ async function handleSaveWebhook(e) {
     alert('✅ Global Webhook URL saved successfully!');
   } catch (err) {
     alert(err.message);
+  }
+}
+
+function copySessionId(sessionId, btn) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(sessionId).then(() => {
+      if (btn) {
+        const original = btn.innerHTML;
+        btn.innerHTML = '<i data-lucide="check" class="w-3 h-3 text-emerald-400"></i>';
+        if (window.lucide) lucide.createIcons();
+        setTimeout(() => {
+          btn.innerHTML = original;
+          if (window.lucide) lucide.createIcons();
+        }, 1500);
+      }
+    }).catch(() => {
+      prompt('Copy Session ID:', sessionId);
+    });
+  } else {
+    prompt('Copy Session ID:', sessionId);
   }
 }
