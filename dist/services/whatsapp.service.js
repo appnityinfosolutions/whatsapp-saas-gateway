@@ -46,7 +46,24 @@ const uuid_1 = require("uuid");
 const db_1 = require("../database/db");
 const config_1 = require("../config");
 const webhook_service_1 = require("./webhook.service");
-const logger = (0, pino_1.default)({ level: 'silent' });
+const logger = (0, pino_1.default)({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' });
+// Small in-memory store so Baileys can re-serve a message when WhatsApp asks for a
+// retry (the getMessage handler). Bounded to avoid unbounded memory growth.
+const messageStore = new Map();
+const MAX_STORED_MESSAGES = 500;
+function rememberMessage(msg) {
+    try {
+        if (!msg?.message || !msg?.key?.id)
+            return;
+        messageStore.set(`${msg.key.remoteJid}:${msg.key.id}`, msg.message);
+        if (messageStore.size > MAX_STORED_MESSAGES) {
+            const oldest = messageStore.keys().next().value;
+            if (oldest)
+                messageStore.delete(oldest);
+        }
+    }
+    catch { }
+}
 class WhatsAppService {
     static sockets = new Map();
     static io = null;
@@ -83,17 +100,14 @@ class WhatsAppService {
             return { message: 'Session is already running', status: session.status };
         }
         const sessionDir = this.getSessionPath(sessionId);
-        const hasCreds = fs_1.default.existsSync(path_1.default.join(sessionDir, 'creds.json'));
-        // Only wipe stored credentials when we deliberately want a brand-new pairing,
-        // when the session was logged out, or when there are no usable credentials yet.
-        //
-        // IMPORTANT: never wipe on a plain reconnect. WhatsApp closes the socket with
-        // code 515 (restartRequired) immediately after the QR is scanned and expects the
-        // client to restart reusing the credentials it just saved. Deleting the auth
-        // folder here destroyed those credentials, so the device never finished linking
-        // and a fresh QR was shown again - which is exactly the "QR generated but device
-        // never links" bug.
-        const needsFreshPairing = opts.forceFresh || session.status === 'LOGGED_OUT' || !hasCreds;
+        // Only wipe stored credentials for a deliberate fresh pairing (the "New QR" action)
+        // or after a real logout. NEVER wipe on a plain reconnect: WhatsApp closes the
+        // socket with code 515 (restartRequired) right after the QR is scanned and expects
+        // the client to reconnect reusing the credentials it just saved. Deleting the auth
+        // folder there destroyed those credentials, so the device never finished linking.
+        // (An empty auth folder is handled by useMultiFileAuthState, which starts a fresh
+        // pairing on its own, so no manual wipe is needed for that case.)
+        const needsFreshPairing = opts.forceFresh || session.status === 'LOGGED_OUT';
         if (needsFreshPairing) {
             try {
                 fs_1.default.rmSync(sessionDir, { recursive: true, force: true });
@@ -113,9 +127,13 @@ class WhatsAppService {
                 creds: state.creds,
                 keys: (0, baileys_1.makeCacheableSignalKeyStore)(state.keys, logger),
             },
-            browser: ['WhatsApp SaaS Gateway', 'Chrome', '124.0.0'],
+            browser: baileys_1.Browsers.macOS('Chrome'),
             generateHighQualityLinkPreview: true,
-            syncFullHistory: true,
+            // CRITICAL: keep this false. With syncFullHistory: true WhatsApp closes the
+            // socket with code 428 (connectionClosed) during the handshake, so the QR is
+            // scanned but the device never links. Verified by isolating each socket option
+            // against a live connection - this is the only one that breaks pairing.
+            syncFullHistory: process.env.SYNC_FULL_HISTORY === 'true',
             // Connection stability improvements
             keepAliveIntervalMs: 30000, // Send ping every 30 seconds
             markOnlineOnConnect: true,
@@ -124,6 +142,8 @@ class WhatsAppService {
             maxMsgRetryCount: 5,
             // Link preview settings
             linkPreviewImageThumbnailWidth: 192,
+            // Allow Baileys to re-serve messages when WhatsApp requests a retry
+            getMessage: async (key) => messageStore.get(`${key.remoteJid}:${key.id}`),
         });
         this.sockets.set(sessionId, sock);
         sock.ev.on('creds.update', saveCreds);
@@ -150,6 +170,7 @@ class WhatsAppService {
                     const shouldReconnect = !isLoggedOut;
                     this.sockets.delete(sessionId);
                     if (isLoggedOut) {
+                        console.log(`[Session ${sessionId}] Logged out (401) - clearing credentials, a new QR is required`);
                         db_1.db.prepare("UPDATE sessions SET status = 'LOGGED_OUT', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
                         this.emitToUser(userId, 'session_status', { sessionId, status: 'LOGGED_OUT' });
                         // Credentials are no longer valid: clear them so a fresh QR can be generated.
@@ -162,13 +183,27 @@ class WhatsAppService {
                         db_1.db.prepare("UPDATE sessions SET status = 'DISCONNECTED', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
                         this.emitToUser(userId, 'session_status', { sessionId, status: 'DISCONNECTED' });
                         if (shouldReconnect && session.is_auto_reconnect) {
-                            // restartRequired reconnects almost instantly; other drops back off
-                            // exponentially (5s, 10s, 20s, 40s, max 60s).
-                            const attempt = isRestartRequired ? 0 : (session.reconnect_attempt || 0) + 1;
-                            const delayMs = isRestartRequired ? 300 : Math.min(5000 * Math.pow(2, attempt - 1), 60000);
-                            console.log(`[Session ${sessionId}] Connection closed (code: ${statusCode}), reconnecting in ${delayMs}ms (attempt ${attempt})...`);
-                            // Update attempt counter
-                            db_1.db.prepare("UPDATE sessions SET reconnect_attempt = ? WHERE id = ?").run(attempt, sessionId);
+                            let delayMs;
+                            if (isRestartRequired) {
+                                // 515 is NOT an error: WhatsApp accepted the pairing and wants an
+                                // immediate reconnect using the credentials that were just saved. The
+                                // new keys MUST be flushed to disk first, and the reconnect must happen
+                                // with NO delay and NO retry counting - otherwise WhatsApp treats the
+                                // pairing as stale and the device never links ("Couldn't link device").
+                                try {
+                                    await saveCreds();
+                                }
+                                catch { }
+                                delayMs = 0;
+                                console.log(`[Session ${sessionId}] restartRequired (515) - reconnecting immediately with saved credentials`);
+                            }
+                            else {
+                                // Other drops back off exponentially (5s, 10s, 20s, 40s, max 60s).
+                                const attempt = (session.reconnect_attempt || 0) + 1;
+                                delayMs = Math.min(5000 * Math.pow(2, attempt - 1), 60000);
+                                db_1.db.prepare("UPDATE sessions SET reconnect_attempt = ? WHERE id = ?").run(attempt, sessionId);
+                                console.log(`[Session ${sessionId}] Connection closed (code: ${statusCode}), reconnecting in ${delayMs}ms (attempt ${attempt})...`);
+                            }
                             setTimeout(() => {
                                 // Skip if a newer socket already exists (the user restarted the session)
                                 // or the session was stopped/removed while this timer was pending.
@@ -287,6 +322,7 @@ class WhatsAppService {
                 for (const msg of messages) {
                     if (!msg.message)
                         continue;
+                    rememberMessage(msg);
                     const remoteJid = msg.key.remoteJid || '';
                     const fromMe = msg.key.fromMe ? 1 : 0;
                     const messageId = msg.key.id || '';
