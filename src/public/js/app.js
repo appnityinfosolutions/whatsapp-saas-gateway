@@ -298,19 +298,23 @@ async function loadSessions() {
         <div class="bg-slate-900/60 border ${isConnected ? 'border-emerald-500/30' : 'border-slate-800'} rounded-2xl p-6 flex flex-col justify-between space-y-4">
           <div>
             <div class="flex items-center justify-between mb-3">
-              <span class="text-xs font-bold text-white tracking-wide">${s.session_name}</span>
-              <span class="px-2 py-0.5 text-[10px] font-mono rounded-full ${
-                isConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 
-                isScanQr ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse' : 
-                'bg-slate-800 text-slate-400'
-              }">${s.status}</span>
-            </div>
+                          <span class="text-xs font-bold text-white tracking-wide">${s.session_name}</span>
+                          <span class="px-2 py-0.5 text-[10px] font-mono rounded-full ${
+                            isConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                            isScanQr ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse' :
+                            'bg-slate-800 text-slate-400'
+                          }">${s.status}</span>
+                        </div>
 
-            <div class="space-y-1.5 text-xs text-slate-400">
-              <div class="flex items-center gap-2">
-                <i data-lucide="phone" class="w-3.5 h-3.5 text-slate-500"></i>
-                <span class="font-mono text-white">${s.phone_number ? '+' + s.phone_number : 'Not Connected'}</span>
-              </div>
+                        <div class="space-y-1.5 text-xs text-slate-400">
+                          <div class="flex items-center gap-2">
+                            <i data-lucide="hash" class="w-3.5 h-3.5 text-slate-500"></i>
+                            <span class="font-mono text-white text-[10px] truncate max-w-[150px]" title="${s.id}">${s.id}</span>
+                          </div>
+                          <div class="flex items-center gap-2">
+                            <i data-lucide="phone" class="w-3.5 h-3.5 text-slate-500"></i>
+                            <span class="font-mono text-white">${s.phone_number ? '+' + s.phone_number : 'Not Connected'}</span>
+                          </div>
               <div class="flex items-center gap-2">
                 <i data-lucide="user" class="w-3.5 h-3.5 text-slate-500"></i>
                 <span>${s.push_name || '—'}</span>
