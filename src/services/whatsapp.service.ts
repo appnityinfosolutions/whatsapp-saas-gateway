@@ -63,9 +63,18 @@ export class WhatsAppService {
     }
 
     const sessionDir = this.getSessionPath(sessionId);
+    
+    // Always force fresh QR generation by clearing stale auth state if not connected
+    if (session.status !== 'CONNECTED') {
+      try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+      } catch {}
+    }
+    
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     const { version, isLatest } = await fetchLatestBaileysVersion();
 
+    // Always reset QR code and status to STARTING to force fresh QR generation
     db.prepare("UPDATE sessions SET status = 'STARTING', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
     this.emitToUser(userId, 'session_status', { sessionId, status: 'STARTING' });
 
