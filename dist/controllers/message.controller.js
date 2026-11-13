@@ -198,8 +198,12 @@ class MessageController {
         ORDER BY last_timestamp DESC
         LIMIT 500
       `;
+            // Placeholder order in the query:
+            //   1. chat_groups WHERE user_id = ?
+            //   2. chat_groups AND session_id = ?   (only when sessionId given)
+            //   3. resolved JOIN WHERE m.user_id = ?
             const params = sessionId
-                ? [req.user.id, sessionId, req.user.id, sessionId]
+                ? [req.user.id, sessionId, req.user.id]
                 : [req.user.id, req.user.id];
             const chats = db_1.db.prepare(query).all(...params);
             // Format: never show the internal @lid ID — show a clean phone number

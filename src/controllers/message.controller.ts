@@ -217,8 +217,12 @@ export class MessageController {
         LIMIT 500
       `;
 
-      const params = sessionId 
-        ? [req.user.id, sessionId, req.user.id, sessionId] 
+      // Placeholder order in the query:
+      //   1. chat_groups WHERE user_id = ?
+      //   2. chat_groups AND session_id = ?   (only when sessionId given)
+      //   3. resolved JOIN WHERE m.user_id = ?
+      const params = sessionId
+        ? [req.user.id, sessionId, req.user.id]
         : [req.user.id, req.user.id];
 
       const chats = db.prepare(query).all(...params);

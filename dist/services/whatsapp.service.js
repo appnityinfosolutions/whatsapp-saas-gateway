@@ -311,6 +311,24 @@ class WhatsAppService {
                     mediaType = 'sticker';
                     body = '[Sticker]';
                 }
+                else if (msg.message.reactionMessage?.text) {
+                    body = msg.message.reactionMessage.text;
+                }
+                else if (msg.message.protocolMessage) {
+                    // Device-sync / protocol messages (chat open, history sync, etc.) —
+                    // they have no real text. Skip them entirely.
+                    continue;
+                }
+                else if (msg.message.viewOnceMessageV2?.message) {
+                    // View-once: treat as media placeholder
+                    mediaType = 'image';
+                    body = '[View once message]';
+                }
+                // Skip system/protocol noise (empty body + no media type) so it never
+                // creates a phantom "chat" with an empty preview in Live Inbox.
+                if (!body && mediaType === 'text') {
+                    continue;
+                }
                 // Group chats (@g.us) and broadcast/newsletter are not 1:1 chats —
                 // skip them entirely so they never pollute the Live Inbox list.
                 if (remoteJid.endsWith('@g.us') || remoteJid.endsWith('@broadcast') || remoteJid.endsWith('@newsletter')) {
@@ -355,16 +373,17 @@ class WhatsAppService {
                 // Update contacts cache
                 if (remoteJid) {
                     const contactId = `${sessionId}_${remoteJid}`;
-                    const phone = remoteJid.includes('@s.whatsapp.net') ? remoteJid.split('@')[0] : '';
+                    // sql.js cannot bind undefined — pass null for missing values
+                    const phone = remoteJid.includes('@s.whatsapp.net') ? remoteJid.split('@')[0] : null;
                     try {
                         db_1.db.prepare(`
               INSERT INTO contacts (id, user_id, session_id, jid, name, phone_number, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-              ON CONFLICT(session_id, jid) DO UPDATE SET 
+              ON CONFLICT(session_id, jid) DO UPDATE SET
                 name = COALESCE(NULLIF(excluded.name, ''), contacts.name),
-                phone_number = COALESCE(NULLIF(excluded.phone_number, ''), contacts.phone_number),
+                phone_number = COALESCE(excluded.phone_number, contacts.phone_number),
                 updated_at = CURRENT_TIMESTAMP
-            `).run(contactId, userId, sessionId, remoteJid, pushName, phone);
+            `).run(contactId, userId, sessionId, remoteJid, pushName || null, phone);
                     }
                     catch { }
                 }
@@ -511,6 +530,26 @@ class WhatsAppService {
       INSERT INTO messages (id, user_id, session_id, remote_jid, from_me, push_name, message_id, body, media_type, status, timestamp)
       VALUES (?, ?, ?, ?, 1, 'You', ?, ?, 'text', 'SENT', ?)
     `).run(msgId, userId, sessionId, jid, sent?.key?.id || '', text, timestamp);
+        // Ensure a contact row exists for this recipient so Live Inbox can show a
+        // name/phone for outbound-only chats (previously only inbound messages
+        // created contact rows, so a sent-but-never-replied chat showed just the
+        // JID id). We store the phone when we have a real @s.whatsapp.net JID.
+        // NOTE: sql.js cannot bind `undefined` — use null for missing values,
+        // and bind NULL (not '') so COALESCE keeps existing values on conflict.
+        if (jid && !jid.endsWith('@g.us')) {
+            const contactId = `${sessionId}_${jid}`;
+            const phone = jid.includes('@s.whatsapp.net') ? jid.split('@')[0] : null;
+            try {
+                db_1.db.prepare(`
+          INSERT INTO contacts (id, user_id, session_id, jid, name, phone_number, updated_at)
+          VALUES (?, ?, ?, ?, '', ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(session_id, jid) DO UPDATE SET
+            phone_number = COALESCE(excluded.phone_number, contacts.phone_number),
+            updated_at = CURRENT_TIMESTAMP
+        `).run(contactId, userId, sessionId, jid, phone);
+            }
+            catch { }
+        }
         const result = {
             id: msgId,
             messageId: sent?.key?.id,
@@ -583,6 +622,21 @@ class WhatsAppService {
       INSERT INTO messages (id, user_id, session_id, remote_jid, from_me, push_name, message_id, body, media_type, media_url, media_caption, status, timestamp)
       VALUES (?, ?, ?, ?, 1, 'You', ?, ?, ?, ?, ?, 'SENT', ?)
     `).run(msgId, userId, sessionId, jid, sent?.key?.id || '', bodyText, mediaType, savedMediaUrl || null, caption || '', timestamp);
+        // Ensure a contact row exists for outbound media chats (see sendTextMessage)
+        if (jid && !jid.endsWith('@g.us')) {
+            const contactId = `${sessionId}_${jid}`;
+            const phone = jid.includes('@s.whatsapp.net') ? jid.split('@')[0] : null;
+            try {
+                db_1.db.prepare(`
+          INSERT INTO contacts (id, user_id, session_id, jid, name, phone_number, updated_at)
+          VALUES (?, ?, ?, ?, '', ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(session_id, jid) DO UPDATE SET
+            phone_number = COALESCE(excluded.phone_number, contacts.phone_number),
+            updated_at = CURRENT_TIMESTAMP
+        `).run(contactId, userId, sessionId, jid, phone);
+            }
+            catch { }
+        }
         const result = {
             id: msgId,
             messageId: sent?.key?.id,

@@ -42,7 +42,9 @@ export const db = {
       run(...params: any[]) {
         const stmt = sqlDb.prepare(sql);
         // Flatten array params if passed as single array
-        const bindParams = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+        // sql.js cannot bind `undefined` — normalize to null
+        const flat = params.map((p) => (p === undefined ? null : p));
+        const bindParams = flat.length === 1 && Array.isArray(flat[0]) ? flat[0] : flat;
         stmt.run(bindParams);
         stmt.free();
         persistDb();
@@ -51,7 +53,10 @@ export const db = {
 
       get(...params: any[]) {
         const stmt = sqlDb.prepare(sql);
-        const bindParams = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+        // sql.js cannot bind `undefined` (throws) — normalize to null so
+        // COALESCE(?, col) patterns and optional values work correctly.
+        const normalized = params.map((p) => (p === undefined ? null : p));
+        const bindParams = normalized.length === 1 && Array.isArray(normalized[0]) ? normalized[0] : normalized;
         stmt.bind(bindParams);
         let result: any = null;
         if (stmt.step()) {
@@ -63,7 +68,9 @@ export const db = {
 
       all(...params: any[]) {
         const stmt = sqlDb.prepare(sql);
-        const bindParams = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
+        // sql.js cannot bind `undefined` — normalize to null
+        const normalized = params.map((p) => (p === undefined ? null : p));
+        const bindParams = normalized.length === 1 && Array.isArray(normalized[0]) ? normalized[0] : normalized;
         stmt.bind(bindParams);
         const results: any[] = [];
         while (stmt.step()) {

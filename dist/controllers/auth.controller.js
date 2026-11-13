@@ -39,7 +39,7 @@ class AuthController {
             db_1.db.prepare(`
         UPDATE users SET name = COALESCE(?, name), webhook_url = COALESCE(?, webhook_url), updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).run(name, webhook_url, req.user.id);
+      `).run(name ?? null, webhook_url ?? null, req.user.id);
             const updated = auth_service_1.AuthService.getUserById(req.user.id);
             return res.json({ success: true, user: updated });
         }

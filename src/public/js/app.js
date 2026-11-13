@@ -207,7 +207,19 @@ function initSocket() {
 
   socket.on('message_sent', (msg) => {
     loadOverviewStats();
+    // Reload the inbox so the just-sent message becomes the chat preview and
+    // the chat moves to the top — previously only inbound 'new_message'
+    // triggered a reload, so sent messages didn't appear in Live Inbox.
     loadChats();
+    // If the sent message belongs to the currently open chat, also append it
+    // to the message thread (the send handler already appends, but this keeps
+    // API/bulk sends in sync too).
+    const rJid = msg.remoteJid || msg.remote_jid;
+    const activeSessionId = document.getElementById('chatSessionSelector')?.value;
+    if (activeChatRemoteJid && activeSessionId === msg.sessionId &&
+        (activeChatRemoteJid === rJid || activeChatRemoteJid.split('@')[0] === (rJid || '').split('@')[0])) {
+      appendMessageBubble(msg);
+    }
   });
 }
 
@@ -730,11 +742,29 @@ async function populateChatSessionSelector() {
   if (!data.success) return;
 
   const select = document.getElementById('chatSessionSelector');
-  select.innerHTML = '<option value="">Select Connected Session...</option>' + 
-    data.sessions.filter(s => s.status === 'CONNECTED').map(s => `<option value="${s.id}">${s.session_name} (+${s.phone_number})</option>`).join('');
+  // Show ALL sessions (not only CONNECTED) — a disconnected session can still
+  // have chats/messages, and the inbox must remain usable. Label each with
+  // its status so it's clear whether sending will work.
+  const sorted = [...data.sessions].sort((a, b) => {
+    const rank = (s) => (s.status === 'CONNECTED' ? 0 : 1);
+    return rank(a) - rank(b);
+  });
+  select.innerHTML = '<option value="">Select Session...</option>' +
+    sorted.map(s => {
+      const statusTag = s.status === 'CONNECTED' ? 'Connected' : s.status;
+      const phone = s.phone_number ? ` (+${String(s.phone_number).replace(/\D/g, '')})` : '';
+      return `<option value="${s.id}">${escapeHtml(s.session_name)}${phone} — ${statusTag}</option>`;
+    }).join('');
 
-  if (data.sessions.filter(s => s.status === 'CONNECTED').length > 0) {
-    select.value = data.sessions.filter(s => s.status === 'CONNECTED')[0].id;
+  // Auto-select the first CONNECTED session, else the first session, so the
+  // inbox loads immediately instead of staying empty.
+  const firstConnected = data.sessions.find(s => s.status === 'CONNECTED');
+  if (firstConnected) {
+    select.value = firstConnected.id;
+  } else if (sorted.length > 0) {
+    select.value = sorted[0].id;
+  }
+  if (select.value) {
     loadChats();
   }
 }
