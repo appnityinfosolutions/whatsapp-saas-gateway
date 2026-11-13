@@ -79,38 +79,35 @@ exports.db = {
 async function initDatabase() {
     // Ensure /tmp/data exists first
     ensureTmpDataDir();
-    // Locate WASM file - Vercel bundles to /var/task/dist/, Render copies to dist/
-    const isVercel = !!process.env.VERCEL;
-    const isRender = !!process.env.RENDER;
-    const wasmLocations = isVercel
-        ? [
-            path_1.default.join(__dirname, 'sql-wasm.wasm'),
-            path_1.default.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
-            path_1.default.join(process.cwd(), 'sql-wasm.wasm'),
-        ]
-        : isRender
-            ? [
-                path_1.default.join(__dirname, 'sql-wasm.wasm'),
-                path_1.default.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
-                path_1.default.join(process.cwd(), 'sql-wasm.wasm'),
-            ]
-            : [
-                path_1.default.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-            ];
-    let wasmPath = '';
-    for (const loc of wasmLocations) {
-        if (fs_1.default.existsSync(loc)) {
-            wasmPath = loc;
-            break;
-        }
-    }
+    // Locate WASM file. The build script copies sql-wasm.wasm to dist/, and at
+    // runtime __dirname is dist/database/, so the WASM lives one level up:
+    //   path.join(__dirname, '..', 'sql-wasm.wasm')  ->  dist/sql-wasm.wasm
+    // NOTE: do NOT branch on process.env.RENDER / VERCEL here — neither is
+    // reliably set on Render, which is what caused the
+    // "sql-wasm.wasm not found ... dist/node_modules/sql.js/dist/..." boot error.
+    // Instead, probe every plausible location in order and use the first hit.
+    const wasmCandidates = [
+        // 1. Build output copy (dist/sql-wasm.wasm) — used on Render & Vercel
+        path_1.default.join(__dirname, '..', 'sql-wasm.wasm'),
+        // 2. Same-dir copy, if the file is ever placed next to this module
+        path_1.default.join(__dirname, 'sql-wasm.wasm'),
+        // 3. Repo-root-relative build output (covers odd cwd/__dirname combos)
+        path_1.default.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
+        // 4. Dev mode (ts-node): src/database/ -> ../../node_modules/sql.js/dist/
+        path_1.default.join(__dirname, '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        // 5. Fallback via cwd
+        path_1.default.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+    ];
+    const wasmPath = wasmCandidates.find((candidate) => fs_1.default.existsSync(candidate));
     if (!wasmPath) {
-        console.error('❌ sql-wasm.wasm not found in any location:', wasmLocations);
+        console.error('❌ sql-wasm.wasm not found in any location:', wasmCandidates);
         throw new Error('sql-wasm.wasm not found');
     }
     console.log('📦 Loading sql-wasm.wasm from:', wasmPath);
+    // locateFile receives the WASM filename requested by sql.js (sql-wasm.wasm);
+    // resolve it relative to the directory the file was actually found in.
     const SQLModule = await (0, sql_js_1.default)({
-        locateFile: () => wasmPath,
+        locateFile: (file) => path_1.default.join(path_1.default.dirname(wasmPath), file),
     });
     SQL = SQLModule;
     // Load existing database file if present
