@@ -114,70 +114,109 @@ class MessageController {
     static async getChats(req, res) {
         try {
             const { sessionId } = req.query;
-            // Query that groups by contact base ID (merging @lid, @s.whatsapp.net, etc.) and filters out broadcasts
+            // Live Inbox = 1:1 chats only. Excludes status broadcast, newsletters
+            // AND group chats (@g.us). Dedupes by canonical chat identity so the
+            // same person never appears twice (e.g. @lid + @s.whatsapp.net forms).
+            //
+            // @lid JIDs carry an opaque internal ID DIFFERENT from the phone number
+            // in the @s.whatsapp.net JID, so grouping by base_id alone double-lists
+            // them. The canonical key resolves each base_id to the real phone
+            // number (from contacts) when known — both JID forms of the same
+            // person share it => one row. Name/avatar use the same resolution.
             const query = `
-        SELECT 
-          m.remote_jid,
-          m.session_id,
-          m.body as last_message,
-          m.timestamp as last_timestamp,
-          m.from_me,
-          m.media_type,
-          m.media_url,
-          COALESCE(
-            NULLIF(c.name, ''),
-            (SELECT push_name FROM messages m_name WHERE m_name.session_id = m.session_id AND (m_name.remote_jid = m.remote_jid OR substr(m_name.remote_jid, 1, instr(m_name.remote_jid, '@') - 1) = substr(m.remote_jid, 1, instr(m.remote_jid, '@') - 1)) AND push_name IS NOT NULL AND push_name != '' AND push_name != 'You' ORDER BY timestamp DESC LIMIT 1),
-            ''
-          ) as name,
-          COALESCE(
-            NULLIF(c.phone_number, ''),
-            (CASE WHEN m.remote_jid NOT LIKE '%@lid' THEN substr(m.remote_jid, 1, instr(m.remote_jid, '@') - 1) ELSE '' END)
-          ) as phone_number,
-          COALESCE(c.avatar_url, '') as avatar_url,
-          substr(m.remote_jid, 1, instr(m.remote_jid, '@') - 1) as base_id
-        FROM messages m
-        INNER JOIN (
-          SELECT 
-            substr(remote_jid, 1, instr(remote_jid, '@') - 1) as group_id,
-            MAX(timestamp) as max_time
+        WITH chat_groups AS (
+          SELECT
+            substr(remote_jid, 1, instr(remote_jid, '@') - 1) AS base_id,
+            session_id,
+            MAX(timestamp) AS max_time
           FROM messages
-          WHERE user_id = ? 
-            AND remote_jid NOT LIKE '%@broadcast' 
+          WHERE user_id = ?
+            AND remote_jid NOT LIKE '%@broadcast'
             AND remote_jid NOT LIKE '%newsletter%'
+            AND remote_jid NOT LIKE '%@g.us'
             ${sessionId ? 'AND session_id = ?' : ''}
-          GROUP BY substr(remote_jid, 1, instr(remote_jid, '@') - 1)
-        ) latest ON substr(m.remote_jid, 1, instr(m.remote_jid, '@') - 1) = latest.group_id AND m.timestamp = latest.max_time
-        LEFT JOIN contacts c ON c.session_id = m.session_id AND (c.jid = m.remote_jid OR substr(c.jid, 1, instr(c.jid, '@') - 1) = substr(m.remote_jid, 1, instr(m.remote_jid, '@') - 1))
-        WHERE m.user_id = ? 
-          AND m.remote_jid NOT LIKE '%@broadcast' 
-          AND m.remote_jid NOT LIKE '%newsletter%'
-          ${sessionId ? 'AND m.session_id = ?' : ''}
-        GROUP BY substr(m.remote_jid, 1, instr(m.remote_jid, '@') - 1)
-        ORDER BY m.timestamp DESC
-        LIMIT 100
+          GROUP BY substr(remote_jid, 1, instr(remote_jid, '@') - 1), session_id
+        ),
+        resolved AS (
+          SELECT
+            g.base_id, g.session_id, g.max_time,
+            m.remote_jid, m.body AS last_message, m.from_me,
+            m.media_type, m.media_url,
+            COALESCE(
+              NULLIF((SELECT phone_number FROM contacts cp
+                      WHERE cp.session_id = g.session_id
+                        AND substr(cp.jid, 1, instr(cp.jid, '@') - 1) = g.base_id
+                        AND cp.phone_number IS NOT NULL AND cp.phone_number != ''
+                        AND length(cp.phone_number) BETWEEN 7 AND 13
+                      ORDER BY cp.updated_at DESC LIMIT 1), ''),
+              g.base_id
+            ) AS chat_key,
+            COALESCE(
+              NULLIF((SELECT name FROM contacts cn
+                      WHERE cn.session_id = g.session_id
+                        AND substr(cn.jid, 1, instr(cn.jid, '@') - 1) = g.base_id
+                        AND cn.name IS NOT NULL AND cn.name != ''
+                      ORDER BY cn.updated_at DESC LIMIT 1), ''),
+              NULLIF((SELECT push_name FROM messages mn
+                      WHERE mn.session_id = g.session_id
+                        AND substr(mn.remote_jid, 1, instr(mn.remote_jid, '@') - 1) = g.base_id
+                        AND mn.push_name IS NOT NULL AND mn.push_name != ''
+                        AND mn.push_name != 'You'
+                      ORDER BY mn.timestamp DESC LIMIT 1), ''),
+              ''
+            ) AS name,
+            COALESCE(
+              NULLIF((SELECT phone_number FROM contacts cph
+                      WHERE cph.session_id = g.session_id
+                        AND substr(cph.jid, 1, instr(cph.jid, '@') - 1) = g.base_id
+                        AND cph.phone_number IS NOT NULL AND cph.phone_number != ''
+                        AND length(cph.phone_number) BETWEEN 7 AND 13
+                      ORDER BY cph.updated_at DESC LIMIT 1), ''),
+              (CASE WHEN m.remote_jid LIKE '%@s.whatsapp.net' THEN g.base_id ELSE '' END)
+            ) AS phone_digits,
+            COALESCE((SELECT avatar_url FROM contacts cav
+                      WHERE cav.session_id = g.session_id
+                        AND substr(cav.jid, 1, instr(cav.jid, '@') - 1) = g.base_id
+                        AND cav.avatar_url IS NOT NULL AND cav.avatar_url != ''
+                      ORDER BY cav.updated_at DESC LIMIT 1), '') AS avatar_url
+          FROM chat_groups g
+          JOIN messages m
+            ON m.session_id = g.session_id
+           AND substr(m.remote_jid, 1, instr(m.remote_jid, '@') - 1) = g.base_id
+           AND m.timestamp = g.max_time
+          WHERE m.user_id = ?
+            AND m.remote_jid NOT LIKE '%@broadcast'
+            AND m.remote_jid NOT LIKE '%newsletter%'
+            AND m.remote_jid NOT LIKE '%@g.us'
+        )
+        SELECT
+          remote_jid, session_id, last_message, max_time AS last_timestamp,
+          from_me, media_type, media_url, name, phone_digits, avatar_url,
+          chat_key, base_id
+        FROM resolved
+        GROUP BY chat_key, session_id
+        ORDER BY last_timestamp DESC
+        LIMIT 500
       `;
             const params = sessionId
                 ? [req.user.id, sessionId, req.user.id, sessionId]
                 : [req.user.id, req.user.id];
             const chats = db_1.db.prepare(query).all(...params);
-            // Enhance with human-readable phone number & display names
+            // Format: never show the internal @lid ID — show a clean phone number
+            // when we know one, otherwise fall back to the contact name.
             const formattedChats = chats.map((c) => {
-                const jid = c.remote_jid || '';
-                const baseId = c.base_id || (jid.includes('@') ? jid.split('@')[0] : jid);
-                const rawPhone = c.phone_number || '';
+                const digits = String(c.phone_digits || '').replace(/\D/g, '');
+                const hasPhone = digits.length >= 7 && digits.length <= 13;
+                const displayPhone = hasPhone ? `+${digits}` : '';
                 const name = c.name || '';
-                let displayPhone = '';
-                if (rawPhone && rawPhone.length <= 13) {
-                    displayPhone = rawPhone.startsWith('+') ? rawPhone : `+${rawPhone}`;
-                }
-                else if (rawPhone && rawPhone.length > 13) {
-                    displayPhone = `ID: ${rawPhone}`;
-                }
-                const displayName = name || displayPhone || baseId;
+                const displayName = name || displayPhone || c.remote_jid;
                 return {
                     ...c,
                     name,
-                    phone_number: displayPhone || rawPhone,
+                    // phone_number = digits only (API consumers); display_phone =
+                    // human form. Never concatenate phone + id.
+                    phone_number: hasPhone ? digits : '',
+                    display_phone: displayPhone,
                     display_name: displayName,
                 };
             });

@@ -305,6 +305,12 @@ export class WhatsAppService {
           body = '[Sticker]';
         }
 
+        // Group chats (@g.us) and broadcast/newsletter are not 1:1 chats —
+        // skip them entirely so they never pollute the Live Inbox list.
+        if (remoteJid.endsWith('@g.us') || remoteJid.endsWith('@broadcast') || remoteJid.endsWith('@newsletter')) {
+          continue;
+        }
+
         const msgRecordId = uuidv4();
 
         // Download incoming media if present

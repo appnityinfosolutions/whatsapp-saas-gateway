@@ -311,6 +311,11 @@ class WhatsAppService {
                     mediaType = 'sticker';
                     body = '[Sticker]';
                 }
+                // Group chats (@g.us) and broadcast/newsletter are not 1:1 chats —
+                // skip them entirely so they never pollute the Live Inbox list.
+                if (remoteJid.endsWith('@g.us') || remoteJid.endsWith('@broadcast') || remoteJid.endsWith('@newsletter')) {
+                    continue;
+                }
                 const msgRecordId = (0, uuid_1.v4)();
                 // Download incoming media if present
                 if (mediaType !== 'text') {

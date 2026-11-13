@@ -783,9 +783,15 @@ function renderContactsList(chats) {
 
   list.innerHTML = chats.map((c, index) => {
     const baseId = c.base_id || (c.remote_jid || '').split('@')[0];
-    const rawPhone = c.phone_number || baseId;
-    const formattedPhone = rawPhone ? `+${rawPhone}` : baseId;
-    const displayName = c.name || formattedPhone;
+    // Prefer the clean display phone from the API (never the @lid ID).
+    // phone_number is digits-only; fall back to a digits-only extraction of
+    // base_id only when it actually looks like a phone number (7-13 digits).
+    const digits = String(c.phone_number || '').replace(/\D/g, '');
+    const hasPhone = digits.length >= 7 && digits.length <= 13;
+    const formattedPhone = hasPhone ? `+${digits}` : (c.display_phone || '');
+    // Line 1: contact name first, then phone. Line 2: the other one.
+    const displayName = c.name || formattedPhone || c.remote_jid;
+    const subLine = c.name ? formattedPhone : '';
     const isActive = activeChatRemoteJid && (activeChatRemoteJid === c.remote_jid || activeChatRemoteJid.split('@')[0] === baseId);
     
     // Format message snippet with icon
@@ -819,7 +825,7 @@ function renderContactsList(chats) {
             <span class="text-xs font-bold text-white truncate">${escapeHtml(displayName)}</span>
             <span class="text-[9px] text-slate-500 font-mono shrink-0">${c.last_timestamp ? new Date(c.last_timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
           </div>
-          <div class="text-[10px] text-slate-400 font-mono truncate">${escapeHtml(formattedPhone)}</div>
+          ${subLine ? `<div class="text-[10px] text-slate-400 font-mono truncate">${escapeHtml(subLine)}</div>` : ''}
           <div class="text-[11px] text-slate-400 truncate flex items-center mt-0.5">
             ${c.from_me ? '<span class="text-emerald-400 text-[10px] mr-1 font-mono">You:</span>' : ''}
             ${msgIcon}
@@ -903,10 +909,10 @@ function selectChatByIndex(index) {
   const actionsDiv = document.getElementById('activeChatActions');
   if (actionsDiv) actionsDiv.classList.remove('hidden');
 
-  const baseId = chat.base_id || (chat.remote_jid || '').split('@')[0];
-  const rawPhone = chat.phone_number || baseId;
-  const formattedPhone = formatContactPhone(chat.remote_jid, rawPhone);
-  const name = chat.name || formattedPhone;
+  const digits = String(chat.phone_number || '').replace(/\D/g, '');
+  const hasPhone = digits.length >= 7 && digits.length <= 13;
+  const formattedPhone = hasPhone ? `+${digits}` : (chat.display_phone || '');
+  const name = chat.name || formattedPhone || chat.remote_jid;
 
   headerDiv.innerHTML = `
     <div id="activeHeaderAvatar">
