@@ -202,7 +202,12 @@ export async function initDatabase() {
     );
   `);
 
-  // Migrate existing messages table if columns are missing
+  // Migrate existing tables if columns are missing (older DB files were
+  // created before these columns existed — CREATE TABLE IF NOT EXISTS does
+  // not add them to an already-existing table).
+  try {
+    db.exec('ALTER TABLE sessions ADD COLUMN reconnect_attempt INTEGER DEFAULT 0;');
+  } catch {}
   try {
     db.exec('ALTER TABLE messages ADD COLUMN push_name TEXT;');
   } catch {}

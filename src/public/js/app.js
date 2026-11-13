@@ -172,8 +172,7 @@ function initSocket() {
 
   socket.on('session_qr', ({ sessionId, qr }) => {
     if (activeSessionIdForModal === sessionId) {
-      document.getElementById('qrImage').src = qr;
-      document.getElementById('qrModal').classList.remove('hidden');
+      showQrInModal(qr);
     }
     loadSessions();
   });
@@ -181,8 +180,17 @@ function initSocket() {
   socket.on('session_status', ({ sessionId, status, phone, pushName }) => {
     loadSessions();
     loadOverviewStats();
-    if (status === 'CONNECTED' && activeSessionIdForModal === sessionId) {
-      closeQrModal();
+    if (activeSessionIdForModal === sessionId) {
+      if (status === 'CONNECTED') {
+        stopQrCountdown();
+        closeQrModal();
+      } else if (status === 'SCAN_QR' || status === 'STARTING') {
+        setQrStatusText('Waiting for scan…', 'amber');
+      } else if (status === 'DISCONNECTED') {
+        setQrStatusText('Disconnected — reconnecting…', 'red');
+      } else if (status === 'LOGGED_OUT') {
+        setQrStatusText('Logged out — tap Connect / QR to start again', 'red');
+      }
     }
   });
 
@@ -411,20 +419,164 @@ async function startSessionAndShowQr(sessionId) {
   document.getElementById('qrModal').classList.remove('hidden');
   document.getElementById('qrImage').src = 'https://placehold.co/300x300/0f172a/34d399?text=Generating+QR...';
   document.getElementById('pairingCodeDisplay').classList.add('hidden');
+  setQrStatusText('Starting session…', 'amber');
 
   try {
-    await fetch(`${API_BASE}/sessions/${sessionId}/start`, {
+    const res = await fetch(`${API_BASE}/sessions/${sessionId}/start`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${authToken}` },
     });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.status === 'CONNECTED') {
+      // Session was already connected — no QR needed.
+      closeQrModal();
+      loadSessions();
+      return;
+    }
+    // If a QR was already generated server-side (socket already running),
+    // show it immediately instead of waiting for a fresh socket event.
+    if (data.qr) {
+      showQrInModal(data.qr);
+    } else {
+      // QR normally arrives via socket 'session_qr'. Start a countdown for
+      // whichever QR we show; if none arrives within 10s we poll the API
+      // (fallback for missed socket events) and then keep refreshing.
+      startQrCountdown();
+      pollQrUntilVisible(sessionId, 3);
+    }
   } catch (err) {
     console.error('Start session err:', err);
+    setQrStatusText('Failed to start session — check server log', 'red');
   }
 }
 
 function closeQrModal() {
+  stopQrCountdown();
   document.getElementById('qrModal').classList.add('hidden');
   activeSessionIdForModal = null;
+}
+
+// ---------------------------------------------------------------------------
+// QR auto-refresh (10s)
+// WhatsApp rotates QR codes roughly every ~20s and each QR is only valid
+// briefly. We therefore refresh the displayed QR every 10 seconds while the
+// modal is open and the session is still waiting to be scanned. The server
+// also pushes fresh QRs via socket 'session_qr' (showQrInModal restarts the
+// countdown), so this is both a safety net and a fallback if a socket event
+// is missed. After 90s we stop auto-refresh (QR expired — user should tap
+// "Connect / QR" again to start a fresh session).
+// ---------------------------------------------------------------------------
+const QR_REFRESH_MS = 10000;
+const QR_MAX_AUTO_REFRESH_MS = 90000;
+let qrCountdownTimer = null;
+let qrCountdownStart = 0;
+
+function setQrStatusText(text, color) {
+  const el = document.getElementById('qrStatusText');
+  if (!el) return;
+  const dotColor = color === 'red' ? 'bg-red-400' : 'bg-amber-400';
+  el.innerHTML = `<span class="w-2 h-2 rounded-full ${dotColor} animate-pulse inline-block"></span> ${text}`;
+}
+
+function showQrInModal(qr) {
+  const img = document.getElementById('qrImage');
+  if (!img) return;
+  img.src = qr;
+  document.getElementById('qrModal').classList.remove('hidden');
+  setQrStatusText('Scan within 10s — QR refreshes automatically', 'amber');
+  startQrCountdown();
+}
+
+function startQrCountdown() {
+  stopQrCountdown();
+  qrCountdownStart = Date.now();
+  const el = document.getElementById('qrCountdown');
+  const tick = () => {
+    const elapsed = Date.now() - qrCountdownStart;
+    const remaining = Math.max(0, Math.ceil((QR_REFRESH_MS - elapsed) / 1000));
+    if (el) el.textContent = `(${remaining}s)`;
+    if (elapsed >= QR_MAX_AUTO_REFRESH_MS) {
+      stopQrCountdown();
+      setQrStatusText('QR expired — close and tap Connect / QR for a new one', 'red');
+      return;
+    }
+    if (elapsed >= QR_REFRESH_MS) {
+      // Time to refresh: fetch the latest QR from the server (or restart
+      // session if the socket died) and restart the 10s countdown.
+      refreshQrNow();
+      return;
+    }
+    qrCountdownTimer = setTimeout(tick, 250);
+  };
+  tick();
+}
+
+function stopQrCountdown() {
+  if (qrCountdownTimer) {
+    clearTimeout(qrCountdownTimer);
+    qrCountdownTimer = null;
+  }
+  const el = document.getElementById('qrCountdown');
+  if (el) el.textContent = '';
+}
+
+async function refreshQrNow() {
+  if (!activeSessionIdForModal) return;
+  try {
+    const res = await fetch(`${API_BASE}/sessions/${activeSessionIdForModal}/qr`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data.status === 'CONNECTED') {
+      closeQrModal();
+      loadSessions();
+      return;
+    }
+    if (data.qr) {
+      showQrInModal(data.qr);
+      return;
+    }
+    // No QR yet (socket not started / died) — restart the session to get one.
+    const startRes = await fetch(`${API_BASE}/sessions/${activeSessionIdForModal}/start`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    const startData = await startRes.json().catch(() => ({}));
+    if (startData.qr) showQrInModal(startData.qr);
+    else startQrCountdown();
+  } catch (err) {
+    console.error('QR refresh err:', err);
+    startQrCountdown();
+  }
+}
+
+// Short poll (3x, 2s apart) right after opening the modal, so a QR that was
+// generated before the modal opened still appears quickly. After that, the
+// 10s countdown + socket events take over.
+async function pollQrUntilVisible(sessionId, attempts = 3) {
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (activeSessionIdForModal !== sessionId) return;
+    const img = document.getElementById('qrImage');
+    if (img && img.src && !img.src.includes('placehold.co')) return; // QR already shown
+    try {
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/qr`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.qr) {
+        showQrInModal(data.qr);
+        return;
+      }
+      if (data.status === 'CONNECTED') {
+        closeQrModal();
+        loadSessions();
+        return;
+      }
+    } catch (err) {
+      // keep polling
+    }
+  }
 }
 
 async function handleRequestPairingCode() {

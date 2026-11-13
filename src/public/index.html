@@ -833,6 +833,14 @@ console.log(data);</code></pre>
         <img id="qrImage" src="" alt="WhatsApp QR Code" class="w-64 h-64 object-contain">
       </div>
 
+      <div class="flex items-center justify-center gap-2 text-[11px] text-slate-400">
+        <span id="qrStatusText" class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse inline-block"></span>
+          Waiting for QR…
+        </span>
+        <span id="qrCountdown" class="font-mono font-semibold text-amber-400"></span>
+      </div>
+
       <!-- Pairing Code Alternative Option -->
       <div class="pt-2 border-t border-slate-800">
         <p class="text-xs text-slate-400 mb-2">Or connect via 8-Digit Pairing Code:</p>

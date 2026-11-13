@@ -59,13 +59,19 @@ export class WhatsAppService {
     }
 
     if (this.sockets.has(sessionId)) {
-      return { message: 'Session is already running', status: session.status };
+      // Socket already running — return the current QR/status so the
+      // dashboard can display it immediately instead of waiting.
+      const fresh: any = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) || session;
+      return { message: 'Session is already running', status: fresh.status, qr: fresh.qr_code };
     }
 
     const sessionDir = this.getSessionPath(sessionId);
-    
-    // Always force fresh QR generation by clearing stale auth state if not connected
-    if (session.status !== 'CONNECTED') {
+
+    // Only wipe auth state when the user explicitly logged out (LOGGED_OUT).
+    // Previously this wiped on ANY non-CONNECTED status, which destroyed the
+    // credentials on every reconnect and forced a re-scan — the socket would
+    // never reach 'open', so the device never connected.
+    if (session.status === 'LOGGED_OUT') {
       try {
         fs.rmSync(sessionDir, { recursive: true, force: true });
       } catch {}
@@ -77,6 +83,8 @@ export class WhatsAppService {
     // Always reset QR code and status to STARTING to force fresh QR generation
     db.prepare("UPDATE sessions SET status = 'STARTING', qr_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(sessionId);
     this.emitToUser(userId, 'session_status', { sessionId, status: 'STARTING' });
+
+    console.log(`[Session ${sessionId}] starting Baileys socket (auth dir: ${sessionDir})`);
 
     const sock = makeWASocket({
       version,
@@ -105,6 +113,7 @@ export class WhatsAppService {
 
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
+      console.log(`[Session ${sessionId}] connection.update: ${connection}${qr ? ' (qr)' : ''}`);
 
       if (qr) {
         try {
@@ -118,7 +127,13 @@ export class WhatsAppService {
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+        // restartRequired (515) means: close the socket and start a new one.
+        // It is NOT a logout — credentials are still valid, so reconnecting
+        // with the saved auth state must succeed (no re-scan needed).
+        const isRestartRequired = statusCode === DisconnectReason.restartRequired;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+        console.log(`[Session ${sessionId}] connection closed (code: ${statusCode}${isRestartRequired ? ', restartRequired' : ''})`);
 
         this.sockets.delete(sessionId);
 
@@ -135,7 +150,7 @@ export class WhatsAppService {
 
           if (shouldReconnect && session.is_auto_reconnect) {
             // Exponential backoff: 5s, 10s, 20s, 40s, max 60s
-            const attempt = (session.reconnectAttempt || 0) + 1;
+            const attempt = (session.reconnect_attempt || 0) + 1;
             const delayMs = Math.min(5000 * Math.pow(2, attempt - 1), 60000);
             
             console.log(`[Session ${sessionId}] Connection closed (code: ${statusCode}), reconnecting in ${delayMs/1000}s (attempt ${attempt})...`);
@@ -143,9 +158,11 @@ export class WhatsAppService {
             // Update attempt counter
             db.prepare("UPDATE sessions SET reconnect_attempt = ? WHERE id = ?").run(attempt, sessionId);
             
+            // restartRequired should come back almost immediately.
+            const actualDelay = isRestartRequired ? 1000 : delayMs;
             setTimeout(() => {
               this.startSession(userId, sessionId).catch(console.error);
-            }, delayMs);
+            }, actualDelay);
           }
         }
 
